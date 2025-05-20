@@ -50,6 +50,28 @@ class ArenaBin {
   static constexpr size_t kRunHoldCount = SlabConst::kRunHoldCount;
   static constexpr size_t kMaxSmallIndex = SizeClass::size2index_compute(kMaxSmallSize);
 
+ private:
+  /**
+   * @brief find a non-empty run in runs, or acquire a new run
+   * @return an iterator to a run in runs
+   * */
+  iterator select_run() {
+    assert(type_ == kSmall || type_ == kMedium);
+    if(runs_.empty()) {
+      if(type_ == kSmall) {
+        auto [meta, run] = run_case_->srun_acquire(arena_, index_);
+        assert((void*) meta == (void*) run);
+        size_t rsize = SlabConst::kRunSizeTab[SlabConst::kCBin2RBin[index_ / kNSlabsPerGrp]];
+        void* objs = (void*) ((uintptr_t) run + rsize - meta->count() * meta->size());
+        if(run) runs_.insert({run, RunBits(meta->size(), meta->count(), meta, objs)});
+      } else {
+        auto [meta, run] = run_case_->mrun_acquire(arena_, index_);
+        if(run) runs_.insert({run, RunBits(meta->size(), meta->count(), meta, run)});
+      }
+    }
+    return runs_.begin();
+  }
+
  public:
   ArenaBin() : arena_(-1), index_(-1), type_(kInvalid), run_case_(nullptr), sc_(nullptr) {}
 
@@ -88,24 +110,38 @@ class ArenaBin {
   }
 
   /**
-   * @brief find a non-empty run in runs, or acquire a new run
-   * @return an iterator to a run in runs
+   * @brief reload a half-used small run back to current ArenaBin
+   * @param meta the corresponding small run management meta
+   * @param run the start address of the corresponding run
    * */
-  iterator select_run() {
-    assert(type_ == kSmall || type_ == kMedium);
-    if(runs_.empty()) {
-      if(type_ == kSmall) {
-        auto [meta, run] = run_case_->srun_acquire(arena_, index_);
-        assert((void*) meta == (void*) run);
-        size_t rsize = SlabConst::kRunSizeTab[SlabConst::kCBin2RBin[index_ / kNSlabsPerGrp]];
-        void* objs = (void*) ((uintptr_t) run + rsize - meta->count() * meta->size());
-        if(run) runs_.insert({run, RunBits(meta->size(), meta->count(), meta, objs)});
-      } else {
-        auto [meta, run] = run_case_->mrun_acquire(arena_, index_);
-        if(run) runs_.insert({run, RunBits(meta->size(), meta->count(), meta, run)});
-      }
-    }
-    return runs_.begin();
+  void reboot(SmallMeta* meta, void* run) {
+    assert((void*) meta == run && run != nullptr);
+    assert(type_ == kSmall && meta->cond() == kPolluted);
+    assert(meta->size() == sc_->index2size(index_));
+    LockGuard guard(lock_);
+    size_t rsize = SlabConst::kRunSizeTab[SlabConst::kCBin2RBin[index_ / kNSlabsPerGrp]];
+    void* objs = (void*) ((uintptr_t) run + rsize - meta->count() * meta->size());
+    auto [it, ins] = runs_.insert({run, RunBits(meta->size(), meta->count(), meta, objs)});
+    assert(ins == true);
+    it->second.reboot(meta);
+    meta->cond() = kPure;
+    persist_write_back(&meta->cond(), sizeof(RunCond));
+  }
+
+  /**
+   * @brief reload a half-used medium run back to current ArenaBin
+   * @param meta the corresponding medium run management meta
+   * @param run the start address of the corresponding run
+   * */
+  void reboot(MediumMeta* meta, void* run) {
+    assert(type_ == kMedium && meta->cond() == kPolluted);
+    assert(meta->size() == sc_->index2size(index_));
+    LockGuard guard(lock_);
+    auto [it, ins] = runs_.insert({run, RunBits(meta->size(), meta->count(), meta, run)});
+    assert(ins == true);
+    it->second.reboot(meta);
+    meta->cond() = kPure;
+    persist_write_back(&meta->cond(), sizeof(RunCond));
   }
 
   /**
@@ -154,7 +190,7 @@ class ArenaBin {
    * @param index the region's index in the run
    * */
   void release(MediumMeta* meta, void* run, size_t index) {
-    assert(type_ == kMedium);
+    assert(type_ == kMedium && meta->size() == sc_->index2size(index_));
     LockGuard guard(lock_);
     auto it = runs_.find(run);
     if(it == runs_.end()) { // this extent has been fully allocated, reconstruct
@@ -201,13 +237,33 @@ class Arena {
     }
   }
 
-  ~Arena() {
-    assert(nbinds_ == 0);
-  }
+  ~Arena() { assert(nbinds_ == 0); }
 
   Arena(const Arena&) = delete;
 
   Arena& operator=(const Arena&) = delete;
+
+  /**
+   * @brief reload a half-used small run back to current Arena
+   * @param meta the corresponding small run management meta
+   * @param run the start address of the corresponding run
+   * */
+  void reboot(SmallMeta* meta, void* run) {
+    assert(meta->arena() == index_);
+    size_t bid = sc_->size2index(meta->size());
+    bins_[bid].reboot(meta, run);
+  }
+
+  /**
+   * @brief reload a half-used medium run back to current Arena
+   * @param meta the corresponding medium run management meta
+   * @param run the start address of the corresponding run
+   * */
+  void reboot(MediumMeta* meta, void* run) {
+    assert(meta->arena() == index_);
+    size_t bid = sc_->size2index(meta->size());
+    bins_[bid].reboot(meta, run);
+  }
 
   /**
    * @brief when constructing a new thread cache and binding it to an arena, increment nbinds;

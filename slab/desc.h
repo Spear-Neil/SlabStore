@@ -110,7 +110,7 @@ class alignas(kCacheLineSize) ExtentDesc {
         memset(medium_, 0, 32);
         break;
       case kLarge:
-        for(auto& token : large_) token.init(false);
+        for(auto& token : large_) token.fire(false);
         break;
       default:
         fprintf(stderr, "[ERROR]: invalid DescType %i\n", type);
@@ -180,6 +180,26 @@ class alignas(kCacheLineSize) ExtentDesc {
       if(medium_[rid] != 0) return true;
     }
     return false;
+  }
+
+  /**
+   * @brief check if a small run is allocated
+   * @param ind the index to the small run
+   * */
+  bool small_used(size_t ind) {
+    assert(ind < count_ && type_ == kSmall);
+    size_t uid = ind / 64, idx = ind % 64;
+    uint64_t mask = 0x01ul << idx;
+    return mask & small_[uid];
+  }
+
+  /**
+   * @brief check if a medium run is allocated
+   * @param ind the index to the medium run
+   * */
+  bool medium_used(size_t ind) {
+    assert(ind < count_ && type_ == kMedium);
+    return medium_[ind];
   }
 
   /**
@@ -291,7 +311,7 @@ class SmallMeta {
    * */
   void construct(size_t arena, size_t size, size_t count) {
     size_ = size, arena_ = arena, count_ = count, next_ = nullptr, cond_ = kPure;
-    for(size_t idx = 0; idx < count; idx++) tokens_[idx].init(false);
+    for(size_t idx = 0; idx < count; idx++) tokens_[idx].fire(false);
     persist_write_back(this, sizeof(SmallMeta) + count * sizeof(token_t));
     persist_wait_finish();
   }
@@ -347,7 +367,7 @@ class alignas(kCacheLineSize) MediumMeta {
   void construct(size_t arena, size_t size, size_t count) {
     assert(count <= 51);
     size_ = size, arena_ = arena, count_ = count, next_ = nullptr, cond_ = kPure;
-    for(int ind = 0; ind < count; ind++) tokens_[ind].init(false);
+    for(int ind = 0; ind < count; ind++) tokens_[ind].fire(false);
     persist_write_back(this, sizeof(MediumMeta));
     persist_wait_finish();
   }

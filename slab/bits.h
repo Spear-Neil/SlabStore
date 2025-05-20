@@ -13,6 +13,7 @@
 #include <cstring>
 #include <deque>
 
+#include "const.h"
 #include "token.h"
 #include "desc.h"
 #include "util.h"
@@ -73,6 +74,64 @@ class RunBits {
     meta_ = rbits.meta_, objs_ = rbits.objs_, bits_ = rbits.bits_;
     if(rbits.count_ > kUnitBits) rbits.bits_ = (uint64_t) nullptr;
     return *this;
+  }
+
+  /**
+   * @brief reload bits_ through meta
+   * */
+  void reboot(SmallMeta* meta) {
+    assert((void*) meta == meta_);
+    assert(meta->count() == count_ && meta->size() == size_);
+    if(count_ > kUnitBits) {
+      assert(alloc_ == 0);
+      for(size_t ind = 0; ind < count_; ind++) {
+        size_t uid = ind / kUnitBits, idx = ind % kUnitBits;
+        uint64_t& bits = ((uint64_t*) bits_)[uid];
+        assert(idx != 0 || bits == 0);
+        if(meta->token(ind)->busy()) {
+          bits |= (0x01ul << idx), alloc_++;
+        }
+      }
+    } else {
+      assert(bits_ == 0 && alloc_ == 0);
+      // may be optimized through SIMD instructions
+      for(size_t ind = 0; ind < count_; ind++) {
+        if(meta->token(ind)->busy()) {
+          bits_ |= (0x01ul << ind), alloc_++;
+        }
+      }
+    }
+    assert(alloc_ != 0);
+  }
+
+  /**
+   * @brief reload bits_ through meta
+   * */
+  void reboot(MediumMeta* meta) {
+    assert((void*) meta == meta_ && count_ <= kUnitBits);
+    assert(meta->count() == count_ && meta->size() == size_);
+    assert(bits_ == 0 && alloc_ == 0);
+    for(size_t ind = 0; ind < count_; ind++) {
+      if(meta->token(ind)->busy()) {
+        bits_ |= (0x01ul << ind), alloc_++;
+      }
+    }
+    assert(alloc_ != 0);
+  }
+
+  /**
+   * @brief reload bits_ through desc
+   * */
+  void reboot(ExtentDesc* desc) {
+    assert((void*) desc == meta_ && count_ <= kUnitBits);
+    assert(desc->count() == count_ && desc->size() == size_);
+    assert(bits_ == 0 && alloc_ == 0);
+    for(size_t ind = 0; ind < count_; ind++) {
+      if(desc->token(ind)->busy()) {
+        bits_ |= (0x01ul << ind), alloc_++;
+      }
+    }
+    assert(alloc_ != 0);
   }
 
   /**

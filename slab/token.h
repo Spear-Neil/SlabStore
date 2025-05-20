@@ -57,22 +57,10 @@ class token_t {
   token_t& operator=(const token_t&) = delete;
 
   /**
-   * @brief to init a region as free/unused state
-   * */
-  void init(bool persist = true) {
-    if(token_ != kFreeCode) {
-      token_.store(kFreeCode, store_order);
-      if(persist) {
-        persist_write_back(this, sizeof(token_t));
-        persist_wait_finish();
-      }
-    }
-  }
-
-  /**
    * @brief to hire corresponding region
    * */
   void hire(bool persist = true) {
+    token_ = kInuseBit;
     if(persist) {
       persist_write_back(this, sizeof(token_t));
       persist_wait_finish();
@@ -81,6 +69,7 @@ class token_t {
 
   /**
    * @brief to fire corresponding region, mark it as free
+   * or to init a region as free/unused state
    * */
   void fire(bool persist = true) {
     if(token_ != kFreeCode) {

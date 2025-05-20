@@ -5,7 +5,7 @@
 using namespace SlabStore;
 
 int main() {
-  std::cout << "[INFO]: persist_state interface test" << std::endl;
+  std::cout << "[INFO]: persist interface test" << std::endl;
   void* block = aligned_alloc(kCacheLineSize, kPageSize);
 
   memset(block, 0, kPageSize);

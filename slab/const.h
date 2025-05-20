@@ -80,7 +80,8 @@ struct SlabConst {
   inline static const std::string kMetaFileName = "meta";
   inline static const std::string kExtentFileName = "extent";
 
-  static_assert(kExtentSize / kSmallRunBase <= 32 * 8);
+  static_assert(kExtentSize / kSmallRunBase <= 64 * 4);
+  static_assert(kExtentSize / kMediumRunBase <= 32);
   static_assert(kNSlabsCached % kNSlabsPerGrp == 0);
   static_assert(kQuantumSize * kNSlabsPerGrp == kMinGapSize);
   static_assert(kMinGapSize << (kNSlabsCached / kNSlabsPerGrp - 1) == kMaxMediumSize);

@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <string>
 #include <tuple>
+#include <vector>
 
 #include "const.h"
 #include "pptr.h"
@@ -38,7 +39,7 @@ class alignas(kPageSize) MetaHead {
   StatCode stat_;      // nvm-allocator stat
   size_t size_;        // pool size (extent segment size)
   size_t mind_;        // index to the valid meta
-  pptr64_t occupied_;  // half-used extents, for fast recovery
+  pptr64_t occupied_;  // half-used extents (have free regions, all runs may have been allocated), for fast recovery
   pptr64_t ext_desc_;  // start address of ExtDesc Segment
   size_t ext_total_;   // total extent number (kExtentSize per Extent)
   pptr64_t med_meta_;  // start address of MedMeta Segment
@@ -298,9 +299,43 @@ class alignas(kPageSize) MetaHead {
   }
 
   /**
+   * @brief reboot and read all half-used extents after normal shutdown/exit
+   * @param extents all half-used extents if the pool is correctly closed
+   * @return whether the pool is correctly closed (ok for allocation)
+   * */
+  bool reboot(std::vector<ExtentDesc*>& extents) {
+    if(stat_ == kChaotic || (stat_ != kConsistent && stat_ != kVolatile)) {
+      fprintf(stderr, "[ERROR]: pool initialization failed\n");
+      exit(EXIT_FAILURE);
+    }
+
+    if(stat_ == kConsistent) { // the pool is correctly closed
+      ExtentDesc* desc = (ExtentDesc*) occupied_.load(), * next;
+      for(; desc != nullptr; desc = next) {
+        assert(desc->type() != kInvalid);
+        extents.push_back(desc);
+        next = (ExtentDesc*) desc->next().load();
+        desc->next() = nullptr;
+        persist_write_back(desc, sizeof(ExtentDesc));
+      }
+
+      stat_ = kVolatile, occupied_ = nullptr;
+      assert((uintptr_t) &stat_ - (uintptr_t) this <= kCacheLineSize);
+      assert((uintptr_t) &occupied_ - (uintptr_t) this <= kCacheLineSize);
+      persist_write_back(this, kCacheLineSize);
+      persist_wait_finish();
+
+      return true;
+    }
+
+    assert(stat_ == kVolatile);
+    return false;
+  }
+
+  /**
    * @brief persist allocator's state before close
    * */
-  void persist_state() {
+  void shutdown() {
     // persist allocator global meta information before atomically update StatCode
     persist_write_back(this, sizeof(MetaHead));
     persist_wait_finish();
@@ -323,6 +358,19 @@ class alignas(kPageSize) MetaHead {
              (double) size_ / kGigaBytes, (double) (half_count + full_count) * kExtentSize / kGigaBytes);
       fflush(stdout);
     }
+  }
+
+  /**
+   * @brief record a half-used extent before allocator close
+   * @param desc the descriptor to the extent
+   * */
+  void record(ExtentDesc* desc) {
+    assert((uintptr_t) desc % kCacheLineSize == 0);
+    assert((uintptr_t) desc >= (uintptr_t) (void*) ext_desc_);
+    assert((uintptr_t) desc < (uintptr_t) ((ExtentDesc*) ext_desc_.load() + ext_total_));
+    desc->next() = occupied_, occupied_ = desc;
+    persist_write_back(desc, sizeof(ExtentDesc));
+    // no waiting for finish, failure atomicity guaranteed by stat
   }
 
   /**
@@ -352,19 +400,6 @@ class alignas(kPageSize) MetaHead {
   }
 
   /**
-   * @brief record a half-used extent before allocator close
-   * @param desc the descriptor to the extent
-   * */
-  void record(ExtentDesc* desc) {
-    assert((uintptr_t) desc % kCacheLineSize == 0);
-    assert((uintptr_t) desc >= (uintptr_t) (void*) ext_desc_);
-    assert((uintptr_t) desc < (uintptr_t) ((ExtentDesc*) ext_desc_.load() + ext_total_));
-    desc->next() = occupied_, occupied_ = desc;
-    persist_write_back(desc, sizeof(ExtentDesc));
-    // no waiting for finish, failure atomicity guaranteed by stat
-  }
-
-  /**
    * @brief pool size (extent segment size)
    * */
   size_t size() const { return size_; }
@@ -376,6 +411,17 @@ class alignas(kPageSize) MetaHead {
     assert(index < ext_total_);
     return (ExtentDesc*) ext_desc_.load() + index;
   }
+
+  /**
+   * @brief translate extent descriptor to index of extent/descriptor
+   * */
+  size_t index(ExtentDesc* desc) const {
+    assert((uintptr_t) desc % kCacheLineSize == 0);
+    assert((uintptr_t) desc >= (uintptr_t) (void*) ext_desc_);
+    assert((uintptr_t) desc < (uintptr_t) ((ExtentDesc*) ext_desc_.load() + ext_total_));
+    assert(desc - (ExtentDesc*) ext_desc_.load() < ext_total_);
+    return desc - (ExtentDesc*) ext_desc_.load();
+  }
 };
 
 static_assert(sizeof(MetaHead) == kPageSize);
@@ -384,7 +430,7 @@ static_assert(sizeof(MetaHead) == kPageSize);
 class MetaFile {
   int fd_;             // meta file descriptor
   void* start_;        // start address
-  size_t size_;        // meta file size, in bytes
+  size_t size_;        // meta file size, in bytes (logical)
   std::string path_;   // meta file path
 
   /*        meta file format
@@ -435,7 +481,7 @@ class MetaFile {
 
   ~MetaFile() {
     if(fd_ != -1) { // check whether the file is opened
-      head().persist_state(); // persist allocator meta information before close
+      head().shutdown(); // persist allocator meta information before close
       int res = fs_file_unmap(start_, size_);
       if(res != 0) {
         fprintf(stderr, "[ERROR]: unknown error, failed to unmap meta file\n");
@@ -477,18 +523,26 @@ class MetaFile {
    * @param path meta file path
    * */
   void open(const std::string& path) {
-
+    path_ = path;
+    bool exist = !fs_path_exist(path_.data());
+    if(!exist) {
+      fprintf(stderr, "[ERROR]: unknown error, meta file doesn't exist\n");
+      exit(EXIT_FAILURE);
+    }
+    fd_ = fs_file_open(path_.data());
+    size_ = fs_file_length(path_.data());
+    mmap_vspace();
   }
-
-  /**
-   * @brief close and un-mmap
-   * */
-  void close() {}
 
   /**
    * @brief MetaHead for ExtDesc and MedMeta management
    * */
   MetaHead& head() const { return *(MetaHead*) start_; }
+
+  /**
+   * @brief meta file size
+   * */
+  size_t size() const { return size_; }
 };
 
 }

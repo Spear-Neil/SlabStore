@@ -262,12 +262,12 @@ class ThreadCache {
     if(ptr == nullptr) return;
     ExtentDesc* desc = ext_case_->descriptor(ptr);
     switch(desc->type()) {
-      case kLarge:
-        return large_release(desc, ptr);
-      case kMedium:
-        return medium_release(desc, ptr);
       case kSmall:
         return small_release(desc, ptr);
+      case kMedium:
+        return medium_release(desc, ptr);
+      case kLarge:
+        return large_release(desc, ptr);
       default:
         fprintf(stderr, "[ERROR]: release, unknown type\n");
         exit(EXIT_FAILURE);

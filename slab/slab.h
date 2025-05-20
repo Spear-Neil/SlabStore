@@ -33,6 +33,7 @@ class Allocator {
   RunCase* run_cases_;   // run (de-)allocation & large region (de-)allocation
   size_t narenas_;       // the number of arena
   Arena* arenas_;        // small & medium region allocation
+  bool state_;           // allocator state (whether the allocator is ok for allocation)
 
   static constexpr size_t kCorePerArena = SlabConst::kCorePerArena;
   static constexpr size_t kCorePerRunCase = SlabConst::kCorePerRunCase;
@@ -105,9 +106,61 @@ class Allocator {
     return builder;
   }
 
+  /**
+   * @brief reboot a half-used extent for small alloc request
+   * @param desc descriptor to the half-used extent
+   * */
+  void small_reboot(ExtentDesc* desc) { // thread safe
+    assert(desc != nullptr && desc->type() == kSmall);
+    assert(desc->rcase() < nruns_);
+    // first reload extent back to corresponding RunCase
+    run_cases_[desc->rcase()].small_reboot(desc);
+    // second reload half-used runs back to corresponding Arena
+    void* ext = ext_case_->extent(desc);
+    size_t rsize = desc->size();
+    for(size_t rid = 0; rid < desc->count(); rid++) {
+      auto meta = (SmallMeta*) ((uintptr_t) ext + rid * rsize);
+      assert(meta->cond() == kPure || meta->cond() == kPolluted);
+      if(desc->small_used(rid) && meta->cond() == kPolluted) {
+        arenas_[meta->arena()].reboot(meta, (void*) meta);
+      }
+    }
+  }
+
+  /**
+   * @brief reboot a half-used extent for medium alloc request
+   * @param desc descriptor to the half-used extent
+   * */
+  void medium_reboot(ExtentDesc* desc) { // thread safe
+    assert(desc != nullptr && desc->type() == kMedium);
+    assert(desc->rcase() < nruns_);
+    // first reload extent back to corresponding RunCase
+    run_cases_[desc->rcase()].medium_reboot(desc);
+    // second reload half-used runs back to corresponding Arena
+    void* ext = ext_case_->extent(desc);
+    size_t rsize = desc->size();
+    for(size_t rid = 0; rid < desc->count(); rid++) {
+      auto meta = (MediumMeta*) desc->runs() + rid;
+      void* run = (void*) ((uintptr_t) ext + rid * rsize);
+      if(desc->medium_used(rid) && meta->cond() == kPolluted) {
+        arenas_[meta->arena()].reboot(meta, run);
+      }
+    }
+  }
+
+  /**
+   * @brief reboot a half-used extent for large alloc request
+   * @param desc descriptor to the half-used extent
+   * */
+  void large_reboot(ExtentDesc* desc) { // thread safe
+    assert(desc != nullptr && desc->type() == kLarge);
+    assert(desc->rcase() < nruns_);
+    run_cases_[desc->rcase()].large_reboot(desc);
+  }
+
  public:
-  Allocator() : ext_case_(nullptr), sc_(nullptr), nruns_(-1),
-                run_cases_(nullptr), narenas_(-1), arenas_(nullptr) {
+  Allocator() : ext_case_(nullptr), sc_(nullptr), nruns_(-1), run_cases_(nullptr),
+                narenas_(-1), arenas_(nullptr), state_(false) {
     ext_case_ = new ExtentCase();
     sc_ = new SizeClass();
     size_t ncpus = ncpus_online();
@@ -141,17 +194,46 @@ class Allocator {
    * @param size pool size in bytes (device capacity by default)
    * */
   void open(const std::string& path, size_t size = -1) {
-    if(size == -1) { ext_case_->open(path); }
-    else { ext_case_->open(path, size); }
+    bool reboot;
+    if(size == -1) { reboot = ext_case_->open(path); }
+    else { reboot = ext_case_->open(path, size); }
+
+    if(reboot) {
+      std::vector<ExtentDesc*> extents;
+      state_ = ext_case_->reboot(extents);
+      if(state_) { // reboot after normal shutdown/exit
+        for(ExtentDesc* desc : extents) {
+          assert(desc->next() == nullptr);
+          // It's unlikely that there are too many half-used extents
+          switch(desc->type()) {
+            case kSmall:
+              return small_reboot(desc);
+            case kMedium:
+              return medium_reboot(desc);
+            case kLarge:
+              return large_reboot(desc);
+            default:
+              fprintf(stderr, "[ERROR]: unknown error, invalid extent type\n");
+              exit(EXIT_FAILURE);
+          }
+        }
+      }
+    } else { state_ = true; }
   }
 
   /**
    * @brief check the state of persistent memory pool; true means the persistent
    * memory pool is ready for allocation; false means the memory pool is closed
-   * incorrectly so the meta-info needs to be rebuilt through the iterator
+   * incorrectly so the meta-info needs to be rebuilt
    * */
-  bool good() {
-    return false;
+  bool good() const { return state_; }
+
+  /**
+   * @brief call this function to rebuild allocator's metadata and iterate all objects/regions
+   * to rebuild user defined data structure after power failure or system crash
+   * */
+  void reboot() {
+
   }
 
   /**
@@ -166,6 +248,7 @@ class Allocator {
    * a persistent memory block is up to your application scenario
    * */
   region_t acquire(size_t size) {
+    assert(state_ == true);
     ThreadCache& tcache = builder().locate();
     return tcache.acquire(size);
   }
@@ -175,6 +258,7 @@ class Allocator {
    * update its state as unallocated
    * */
   void release(void* ptr) {
+    assert(state_ == true);
     ThreadCache& tcache = builder().locate();
     tcache.release(ptr);
   }

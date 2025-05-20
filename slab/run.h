@@ -123,6 +123,32 @@ class RunBin {
   }
 
   /**
+   * @brief reload a half-used extent (including free regions)
+   * @param desc descriptor to the extent (kSmall)
+   * */
+  void small_reboot(ExtentDesc* desc) {
+    assert(type_ == kSmall && desc->size() == rsize_);
+    LockGuard guard(lock_);
+    // check if the extent have any runs free
+    if(desc->locate_fsrun() != desc->count()) {
+      exts_.insert({ext_case_->extent(desc), desc});
+    }
+  }
+
+  /**
+   * @brief reload a half-used extent (including free regions)
+   * @param desc descriptor to the extent (kMedium)
+   * */
+  void medium_reboot(ExtentDesc* desc) {
+    assert(type_ == kMedium && desc->size() == rsize_);
+    LockGuard guard(lock_);
+    // check if the extent have any runs free
+    if(desc->locate_fmrun() != desc->count()) {
+      exts_.insert({ext_case_->extent(desc), desc});
+    }
+  }
+
+  /**
    * @brief allocate a run for small allocation
    * @param arena the index of arena in the global arena array
    * @param size region size in current run
@@ -279,6 +305,19 @@ class LargeBin {
   }
 
   /**
+   * @brief reload a half-used run (kLarge extent) into current LargeBin
+   * @param desc descriptor to the half-used run (kLarge extent)
+   * */
+  void reboot(ExtentDesc* desc) {
+    assert(desc->size() == size_ && desc->type() == kLarge);
+    void* ext = ext_case_->extent(desc);
+    LockGuard guard(lock_);
+    auto [it, ins] = runs_.insert({ext, RunBits(desc->size(), desc->count(), desc, ext)});
+    assert(ins == true);
+    it->second.reboot(desc);
+  }
+
+  /**
    * @brief allocate a large region
    * */
   region_t acquire() {
@@ -347,6 +386,8 @@ class RunCase {
   uint32_t index_;        // the index of current RunCase in the global RunCase array
   ExtentCase* ext_case_;  // extent (de-)allocation
   SizeClass* sc_;         // mutual conversion between slab size and index
+  std::map<std::pair<RegionType, size_t>, size_t> desc2rbid_; // [region type, run size] -> run bin index, for reboot
+
   RunBin rbins_[kRunTypeCount];     // the actual run allocation structure for a specific run size
   LargeBin lbins_[kLargeTypeCount]; // the actual large region allocation structure
 
@@ -354,11 +395,12 @@ class RunCase {
   RunCase(size_t index, ExtentCase* ext_case, SizeClass* sc) :
     index_(index), ext_case_(ext_case), sc_(sc), rbins_{}, lbins_{} {
     assert(ext_case != nullptr);
-    for(size_t rbin = 0; rbin < kRunTypeCount; rbin++) {
-      size_t run_size = SlabConst::kRunSizeTab[rbin];
+    for(size_t rbid = 0; rbid < kRunTypeCount; rbid++) {
+      size_t run_size = SlabConst::kRunSizeTab[rbid];
       RegionType type = kSmall;
-      if(rbin > kSRunBinBound) type = kMedium;
-      rbins_[rbin].init(index_, type, run_size, ext_case_);
+      if(rbid > kSRunBinBound) type = kMedium;
+      desc2rbid_.insert({{type, run_size}, rbid});
+      rbins_[rbid].init(index_, type, run_size, ext_case_);
     }
     for(size_t lbin = 0; lbin < kLargeTypeCount; lbin++) {
       size_t size = kMaxMediumSize << (lbin + 1);
@@ -366,11 +408,42 @@ class RunCase {
     }
   }
 
-  ~RunCase() {}
+  ~RunCase() = default;
 
   RunCase(const RunCase&) = delete;
 
   RunCase& operator=(const RunCase&) = delete;
+
+  /**
+   * @brief reload a half-used extent into current RunCase
+   * @param desc descriptor to the half-used extent (kSmall)
+   * */
+  void small_reboot(ExtentDesc* desc) {
+    assert(desc->rcase() == index_ && desc->type() == kSmall);
+    size_t rbid = desc2rbid_[{desc->type(), desc->size()}];
+    rbins_[rbid].small_reboot(desc);
+  }
+
+  /**
+   * @brief reload a half-used extent into current RunCase
+   * @param desc descriptor to the half-used extent (kSmall)
+   * */
+  void medium_reboot(ExtentDesc* desc) {
+    assert(desc->rcase() == index_ && desc->type() == kMedium);
+    size_t rbid = desc2rbid_[{desc->type(), desc->size()}];
+    rbins_[rbid].medium_reboot(desc);
+  }
+
+  /**
+   * @brief reload a half-used run (kLarge extent) into current RunCase
+   * @param desc descriptor to the half-used run (kLarge extent)
+   * */
+  void large_reboot(ExtentDesc* desc) {
+    assert(desc->type() == kLarge && desc->rcase() == index_);
+    size_t bid = index_most1((desc->size() - 1) / kMaxMediumSize);
+    assert(bid < kLargeTypeCount);
+    lbins_[bid].reboot(desc);
+  }
 
   /**
    * @brief allocate a run for small allocation

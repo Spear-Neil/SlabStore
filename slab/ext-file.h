@@ -58,7 +58,7 @@ class alignas(kPageSize) PersistRoot {
 class ExtentFile {
   int fd_;              // extent file descriptor
   void* start_;         // start address of extent-file
-  size_t size_;         // extent file size, in bytes
+  size_t size_;         // extent file size, in bytes (logical)
   std::string path_;    // extent file path
 
   /*      extent file format
@@ -164,20 +164,29 @@ class ExtentFile {
   void open(const std::string& path) {
     path_ = path;
     bool exist = !fs_path_exist(path_.data());
-
-
-  }
-
-  /**
-   * @brief close extent file and un-mmap
-   * */
-  void close() {
+    if(!exist) {
+      fprintf(stderr, "[ERROR]: unknown error, extent file doesn't exist\n");
+      exit(EXIT_FAILURE);
+    }
+    fd_ = fs_file_open(path_.data());
+    size_ = fs_file_length(path_.data());
+    mmap_vspace();
   }
 
   /**
    * @brief persistent root
    * */
   PersistRoot& root() { return *(PersistRoot*) start_; }
+
+  /**
+   * @brief extent file size
+   * */
+  size_t size() const { return size_; }
+
+  /**
+   * @brief extent segment size (pool size)
+   * */
+  size_t pool_size() const { return size_ - kRootSegSize; }
 
   /**
    * @brief translate index of an extent into its start address

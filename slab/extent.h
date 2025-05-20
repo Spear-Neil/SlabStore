@@ -12,6 +12,7 @@
 #include <cassert>
 #include <string>
 #include <tuple>
+#include <vector>
 
 #include "const.h"
 #include "desc.h"
@@ -48,7 +49,17 @@ class ExtentCase {
    * @brief open an existing persistent memory pool
    * */
   void open_impl() {
-
+    extent_.open(path_ + '/' + kExtentName);
+    size_ = extent_.pool_size();
+    if(size_ % kExtentSize != 0 || size_ % kPoolSizeAlign != 0) {
+      fprintf(stderr, "[ERROR]: unknown error, pool size is not aligned\n");
+      exit(EXIT_FAILURE);
+    }
+    meta_.open(path_ + '/' + kMetaName);
+    if(size_ != meta_.head().size()) {
+      fprintf(stderr, "[ERROR]: unknown error, pool size and meta.head.size do not match\n");
+      exit(EXIT_FAILURE);
+    }
   }
 
   /**
@@ -61,6 +72,7 @@ class ExtentCase {
     }
     size_ = rounddown(size_, kPoolSizeAlign); // aligned on kPoolSizeAlign
     if(size_ < kPoolSizeAlign) size_ = kPoolSizeAlign; // at least kPoolSizeAlign
+    assert(size_ % kExtentSize == 0);
 
     extent_.create(path_ + '/' + kExtentName, size_);
     meta_.create(path_ + '/' + kMetaName, size_);
@@ -69,7 +81,7 @@ class ExtentCase {
  public:
   ExtentCase() : lock_(), path_(), size_(-1), meta_(), extent_() {}
 
-  ~ExtentCase() {}
+  ~ExtentCase() = default;
 
   ExtentCase(const ExtentCase&) = delete;
 
@@ -79,12 +91,23 @@ class ExtentCase {
    * @brief open or create a persistent memory pool
    * @param path persistent memory pool path
    * @param size persistent memory pool size (device capacity by default)
+   * @return whether the memory pool exist
    * */
-  void open(const std::string& path, size_t size = kDefaultSize) {
+  bool open(const std::string& path, size_t size = kDefaultSize) {
     path_ = path, size_ = size;
     bool exist = !fs_path_exist(path_.data());
     if(exist) { open_impl(); }
     else { create_impl(); }
+    return exist;
+  }
+
+  /**
+   * @brief reboot and read all half-used extents after normal shutdown/exit
+   * @param extents all half-used extents if the pool is correctly closed
+   * @return whether the pool is correctly closed (ok for allocation)
+   * */
+  bool reboot(std::vector<ExtentDesc*>& extents) {
+    return meta_.head().reboot(extents);
   }
 
   /**
@@ -111,6 +134,14 @@ class ExtentCase {
   ExtentDesc* descriptor(void* ptr) const {
     size_t ind = extent_.locate(ptr);
     return meta_.head().descriptor(ind);
+  }
+
+  /**
+   * @brief get the extent's start address corresponding to the descriptor
+   * */
+  void* extent(ExtentDesc* desc) const {
+    size_t ind = meta_.head().index(desc);
+    return extent_.locate(ind);
   }
 
   /**
