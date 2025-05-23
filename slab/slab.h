@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cassert>
 #include <set>
+#include <functional>
 
 #include "const.h"
 #include "extent.h"
@@ -31,7 +32,7 @@ class Allocator {
   SizeClass* sc_;        // mutual conversion between cache bin index and slab size
   size_t nruns_;         // the number of RunCase
   RunCase* run_cases_;   // run (de-)allocation & large region (de-)allocation
-  size_t narenas_;       // the number of arena
+  size_t narenas_;       // the number of arenas
   Arena* arenas_;        // small & medium region allocation
   bool state_;           // allocator state (whether the allocator is ok for allocation)
 
@@ -90,7 +91,7 @@ class Allocator {
         idx = aid;
         break;
       }
-      // find the arena with the least threads bound to
+      // find the arena with the fewest threads bound to
       if(arenas_[aid].nbinds() < arenas_[idx].nbinds()) {
         idx = aid;
       }
@@ -113,9 +114,9 @@ class Allocator {
   void small_reboot(ExtentDesc* desc) { // thread safe
     assert(desc != nullptr && desc->type() == kSmall);
     assert(desc->rcase() < nruns_);
-    // first reload extent back to corresponding RunCase
+    // first reload extent back to the corresponding RunCase
     run_cases_[desc->rcase()].small_reboot(desc);
-    // second reload half-used runs back to corresponding Arena
+    // second reload half-used runs back to the corresponding Arena
     void* ext = ext_case_->extent(desc);
     size_t rsize = desc->size();
     for(size_t rid = 0; rid < desc->count(); rid++) {
@@ -134,9 +135,9 @@ class Allocator {
   void medium_reboot(ExtentDesc* desc) { // thread safe
     assert(desc != nullptr && desc->type() == kMedium);
     assert(desc->rcase() < nruns_);
-    // first reload extent back to corresponding RunCase
+    // first reload extent back to the corresponding RunCase
     run_cases_[desc->rcase()].medium_reboot(desc);
-    // second reload half-used runs back to corresponding Arena
+    // second reload half-used runs back to the corresponding Arena
     void* ext = ext_case_->extent(desc);
     size_t rsize = desc->size();
     for(size_t rid = 0; rid < desc->count(); rid++) {
@@ -177,7 +178,7 @@ class Allocator {
   }
 
   ~Allocator() {
-    builder().destroy(); // manually destroy main thread cache
+    builder().destroy(); // manually destroy the main thread cache
     std::destroy_n(arenas_, narenas_);  // return all used runs back to their corresponding RunCase
     std::destroy_n(run_cases_, nruns_); // return all used extents back to ExtentCase and persist for easy restart
     free(arenas_), free(run_cases_);
@@ -231,9 +232,9 @@ class Allocator {
   /**
    * @brief call this function to rebuild allocator's metadata and iterate all objects/regions
    * to rebuild user defined data structure after power failure or system crash
+   * @param func functor (function object) for rebuild user defined data structure
    * */
-  void reboot() {
-
+  void reboot(const std::function<void(region_t)>& func) {
   }
 
   /**
@@ -248,17 +249,19 @@ class Allocator {
    * a persistent memory block is up to your application scenario
    * */
   region_t acquire(size_t size) {
-    assert(state_ == true);
+    assert(state_ == true); // call reboot for rebuild allocator and user defined data structure
     ThreadCache& tcache = builder().locate();
     return tcache.acquire(size);
   }
 
   /**
-   * @brief return a memory block back to persistent memory pool and
-   * update its state as unallocated
+   * @brief return a memory block back to persistent memory pool and update its state as unallocated
+   * @details all the regions/objects that are not released back to allocator are regarded as properly
+   * used by user defined data structures, only free/released regions are considered for allocator recovery
+   * when the allocator is closing/rebooting.
    * */
   void release(void* ptr) {
-    assert(state_ == true);
+    assert(state_ == true); // call reboot for rebuild allocator and user defined data structure
     ThreadCache& tcache = builder().locate();
     tcache.release(ptr);
   }

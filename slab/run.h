@@ -34,11 +34,11 @@ using util::rounddown;
  * */
 class RunBin {
   MutexLock<> lock_;      // run (de-)allocation needs to hold this lock
-  uint32_t rcase_;        // the index of corresponding RunCase in the global RunCase array
+  uint32_t rcase_;        // index of the corresponding RunCase in the global RunCase array
   RegionType type_;       // region type of extents in current RunBin
   uint32_t rsize_;        // run size
   ExtentCase* ext_case_;  // extent (de-)allocation
-  std::unordered_map<void*, ExtentDesc*> exts_; // (the start address of extent, its descriptor)
+  std::unordered_map<void*, ExtentDesc*> exts_; // (start address of an extent, its descriptor)
   typedef std::unordered_map<void*, ExtentDesc*>::iterator iterator;
 
   static constexpr size_t kBucketsCount = 32;
@@ -129,7 +129,7 @@ class RunBin {
   void small_reboot(ExtentDesc* desc) {
     assert(type_ == kSmall && desc->size() == rsize_);
     LockGuard guard(lock_);
-    // check if the extent have any runs free
+    // check if the extent has any runs free
     if(desc->locate_fsrun() != desc->count()) {
       exts_.insert({ext_case_->extent(desc), desc});
     }
@@ -142,7 +142,7 @@ class RunBin {
   void medium_reboot(ExtentDesc* desc) {
     assert(type_ == kMedium && desc->size() == rsize_);
     LockGuard guard(lock_);
-    // check if the extent have any runs free
+    // check if the extent has any runs free
     if(desc->locate_fmrun() != desc->count()) {
       exts_.insert({ext_case_->extent(desc), desc});
     }
@@ -260,11 +260,11 @@ class RunBin {
  * */
 class LargeBin {
   MutexLock<> lock_;      // large region (de-)allocation needs to hold this lock
-  uint32_t rcase_;        // the index of corresponding RunCase in the global RunCase array
+  uint32_t rcase_;        // index of the corresponding RunCase in the global RunCase array
   uint32_t size_;         // max supported large region size
   ExtentCase* ext_case_;  // extent (de-)allocation
   // [the start address of a run, RunBits]
-  std::unordered_map<void*, RunBits> runs_; // non-full(non-empty, half-used) runs (extents) for large allocation
+  std::unordered_map<void*, RunBits> runs_; // non-full (non-empty, half-used) runs (extents) for large allocation
   typedef std::unordered_map<void*, RunBits>::iterator iterator;
 
   static constexpr size_t kBucketCount = 32;
@@ -332,7 +332,7 @@ class LargeBin {
     auto it = runs_.begin();
     RunBits& rbits = it->second;
     region_t region = rbits.alloc_large();
-    if(rbits.empty()) { runs_.erase(it); } // no more regions available in current run
+    if(rbits.empty()) { runs_.erase(it); } // no more regions available in the current run
     return region;
   }
 

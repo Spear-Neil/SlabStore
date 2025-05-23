@@ -33,11 +33,11 @@ using util::popcount;
  * */
 class RunBits {
   uint32_t size_;   // region size in bytes
-  uint16_t count_;  // total regions count in current run
-  uint16_t alloc_;  // the number of regions allocated from current run
+  uint16_t count_;  // total regions count in the current run
+  uint16_t alloc_;  // the number of regions allocated from the current run
   void* meta_;      // run meta of the run
   void* objs_;      // the start address of regions array in a run
-  uint64_t bits_;   // bitmap for regions allocation status
+  uint64_t bits_;   // bitmap for region allocation status
   // 1 means the corresponding region has been allocated from the run
 
   static constexpr size_t kUnitBits = 64;
@@ -53,7 +53,7 @@ class RunBits {
    * */
   RunBits(size_t size, size_t count, void* meta, void* objs, bool empty = false) :
     size_(size), count_(count), alloc_(empty ? count : 0), meta_(meta), objs_(objs), bits_(0) {
-    if(count > kUnitBits) { // more thant 64 regions
+    if(count > kUnitBits) { // more than 64 regions
       size_t nbytes = roundup(count, kUnitBits) / 8;
       bits_ = (uint64_t) malloc(nbytes);
       memset((void*) bits_, empty ? 0xFF : 0, nbytes);
@@ -180,7 +180,7 @@ class RunBits {
 
         while(regions.size() < restock) {
           int idx = index_least0(bits);
-          if(idx == count || idx == -1) break;   // no more regions in current unit
+          if(idx == count || idx == -1) break;   // no more regions in the current unit
           token_t* token = locate_token(uid * kUnitBits + idx, type);
           void* region = (void*) ((uintptr_t) objs_ + (uid * kUnitBits + idx) * size_);
           regions.emplace_back(token, region);

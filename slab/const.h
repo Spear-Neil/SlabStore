@@ -29,7 +29,7 @@ struct SlabConst {
   static constexpr size_t kCorePerArena = 2;
   /* processor number bound to a RunCase, reduce contention on run allocation */
   static constexpr size_t kCorePerRunCase = kCorePerArena * 2;
-  /* the number of persistent root pointer, initialized with nullptr */
+  /* the number of persistent root pointers, initialized with nullptr */
   static constexpr size_t kRootCount = 1024;
   /* size of extent, allocation requests get memory blocks from an extent, the start
    * address of extent file except root segment should be aligned on kExtentSize */

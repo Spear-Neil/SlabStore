@@ -35,12 +35,12 @@ using util::LockGuard;
 class ArenaBin {
   MutexLock<> lock_;   // region (de-)allocation needs to hold this lock
   uint32_t arena_;     // the index of corresponding arena in the global arena array
-  uint32_t index_;     // the ArenaBin index within bins array, corresponding to size class index
+  uint32_t index_;     // the ArenaBin index within the ArenaBin array, corresponding to size class index
   RegionType type_;    // type of regions in current ArenaBin
   RunCase* run_case_;  // corresponding RunCase for run (de-)allocation
   SizeClass* sc_;      // mutual conversion between slab class index and size
   // [the start address of a run, RunBits]
-  std::unordered_map<void*, RunBits> runs_; // non-full(non-empty, half-used) runs for allocation
+  std::unordered_map<void*, RunBits> runs_; // non-full (non-empty, half-used) runs for allocation
   typedef std::unordered_map<void*, RunBits>::iterator iterator;
 
   static constexpr size_t kBucketsCount = 32;
@@ -156,7 +156,7 @@ class ArenaBin {
       if(rit == runs_.end()) break; // no more runs
       RunBits& rbits = rit->second;
       rbits.fill_regions(regions, restock, type_);
-      // no more regions in current run, remove it from hash map
+      // no more regions in the current run, remove it from the hash map
       if(rbits.empty()) { runs_.erase(rit); }
     }
   }

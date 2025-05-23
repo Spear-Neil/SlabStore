@@ -46,7 +46,7 @@ class alignas(kPageSize) MetaHead {
   size_t med_total_;   // total MedMeta number
 
   struct alignas(kCacheLineSize) DescMeta {
-    size_t ext_used;    // used extent number including free extent
+    size_t ext_used;    // used extent number, including free extents
     pptr64_t ext_free;  // extent free list
     size_t med_used;    // used MedMeta number including free MedMeta
     pptr64_t med_free;  // MedMeta free list
@@ -481,7 +481,7 @@ class MetaFile {
 
   ~MetaFile() {
     if(fd_ != -1) { // check whether the file is opened
-      head().shutdown(); // persist allocator meta information before close
+      head().shutdown(); // persist allocator's meta-information before close
       int res = fs_file_unmap(start_, size_);
       if(res != 0) {
         fprintf(stderr, "[ERROR]: unknown error, failed to unmap meta file\n");

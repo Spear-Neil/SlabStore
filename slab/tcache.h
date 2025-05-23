@@ -115,7 +115,7 @@ class CacheBin {
     if(regions_.empty()) {
       // has no cached regions, restock from arena
       arena_->fill_cache_bin(regions_, stock_, index_);
-      // failed to restock for some reason, e.g. no more space
+      // failed to restock for some reason, e.g., no more space
       if(regions_.empty()) { return {nullptr, nullptr}; }
     }
     // todo: adjust allocation order, to avoid cache line flush at the same line

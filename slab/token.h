@@ -18,32 +18,32 @@ namespace SlabStore {
 
 class token_t {
   std::atomic<uint8_t> token_;
-  // Layout of token: | inuse (1bit) | mode (1bit)         | option (1bit)      | marker (5bits) |
-  // assignment:      | free/busy    | volatile/persistent | default/customized | user-defined   |
+  // Layout of token: |  inuse (1bit)  |  mode (1bit)          |  marker (6 bits)    |
+  // assignment:      |  free/busy     |  volatile/persistent  |  user-defined tags  |
   // The first significant bit is used as occupation marker; zero for free, one for being used;
   // The second significant bit is used as use mode marker; zero for use the persistent memory
   // object as volatile memory object (when system crashes [StatCode: kVolatile], all contents
   // in the memory object is view as damaged or invalid, so when rebuilding allocator's meta-info,
-  // such memory object is marked as free; after normal system shutdown, data in such objects can
+  // such memory object should be released; after normal system shutdown, data in such objects can
   // be viewed as consistent); one for persistent memory object (user is in charge of maintaining
   // data consistency through a programming model similar to reserve-publish, after system crashes
   // due to power failure, we presume that data in such persistent memory object is consistent)
-  // The third significant bit is used as an option indicating whether it has user-defined marker,
-  // zero for default object without user-defined marker, one for memory object with user-defined
-  // marker (both volatile and persistent memory object can be attached with a marker);
-  // The remaining five bits are used as user-defined marker (e.g. classification tags for different
-  // customized memory objects, 0 - 31)
+  // The remaining six bits are used as user-defined marker (e.g. classification tags for different
+  // customized memory objects, 0 - 63)
+
+  // as for allocator, it only cares about whether an object is allocated (inuse), so all objects
+  // marked with inuse bit need to be processed appropriately when rebuilding user-defined data
+  // structures after system crashes, regardless of whether an object is marked with persistent.
 
   static constexpr uint8_t kInuseBit = 0x80;
   static constexpr uint8_t kModeBit = 0x40;
-  static constexpr uint8_t kOptionBit = 0x20;
-  static constexpr uint8_t kMarkBits = 0x1F;
+  static constexpr uint8_t kMarkBits = 0x3F;
 
   // the region is free/unused
   static constexpr uint8_t kFreeCode = 0x00;
 
   // ensure every load/store operation is compiled as memory operation
-  // data consistency and memory ordering is maintaining by upper level logic
+  // data consistency and memory ordering are maintaining by upper level logic
   static constexpr std::memory_order load_order = std::memory_order_relaxed;
   static constexpr std::memory_order store_order = std::memory_order_relaxed;
 
@@ -58,9 +58,14 @@ class token_t {
 
   /**
    * @brief to hire corresponding region
+   * @param mode use mode, true for persistent object, false for volatile object
+   * @param tag user defined marker/tag (zero by default)
+   * @param persist whether to write token back to storage medium immediately
    * */
-  void hire(bool persist = true) {
-    token_ = kInuseBit;
+  void hire(bool mode = true, uint8_t tag = 0, bool persist = true) {
+    assert(token_ == kFreeCode && tag <= kMarkBits);
+    uint8_t user = (mode ? kModeBit : 0) | tag;
+    token_ = kInuseBit | user;
     if(persist) {
       persist_write_back(this, sizeof(token_t));
       persist_wait_finish();
@@ -70,6 +75,7 @@ class token_t {
   /**
    * @brief to fire corresponding region, mark it as free
    * or to init a region as free/unused state
+   * @param persist whether to write token back to storage medium immediately
    * */
   void fire(bool persist = true) {
     if(token_ != kFreeCode) {
@@ -87,14 +93,9 @@ class token_t {
   bool busy() { return token_.load(load_order) & kInuseBit; }
 
   /**
-   * @brief the use mode of corresponding memory object
+   * @brief the use mode of corresponding memory object, true for persistent object, false for volatile object
    * */
   bool mode() { return token_.load(load_order) & kModeBit; }
-
-  /**
-   * @brief whether the region is attached with user-defined mark
-   * */
-  bool customized() { return token_.load(load_order) & kOptionBit; }
 
   /**
    * @brief user-defined marker
