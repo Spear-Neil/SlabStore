@@ -110,38 +110,33 @@ class ArenaBin {
   }
 
   /**
-   * @brief reload a half-used small run back to current ArenaBin
+   * @brief reload a small run back to current ArenaBin
    * @param meta the corresponding small run management meta
    * @param run the start address of the corresponding run
    * */
-  void reboot(SmallMeta* meta, void* run) {
-    assert((void*) meta == run && run != nullptr);
-    assert(type_ == kSmall && meta->cond() == kPolluted);
+  void reload(SmallMeta* meta, void* run) {
+    assert(type_ == kSmall && (void*) meta == run);
     assert(meta->size() == sc_->index2size(index_));
     LockGuard guard(lock_);
     size_t rsize = SlabConst::kRunSizeTab[SlabConst::kCBin2RBin[index_ / kNSlabsPerGrp]];
     void* objs = (void*) ((uintptr_t) run + rsize - meta->count() * meta->size());
     auto [it, ins] = runs_.insert({run, RunBits(meta->size(), meta->count(), meta, objs)});
     assert(ins == true);
-    it->second.reboot(meta);
-    meta->cond() = kPure;
-    persist_write_back(&meta->cond(), sizeof(RunCond));
+    it->second.reload(meta);
   }
 
   /**
-   * @brief reload a half-used medium run back to current ArenaBin
+   * @brief reload a medium run back to current ArenaBin
    * @param meta the corresponding medium run management meta
    * @param run the start address of the corresponding run
    * */
-  void reboot(MediumMeta* meta, void* run) {
-    assert(type_ == kMedium && meta->cond() == kPolluted);
+  void reload(MediumMeta* meta, void* run) {
+    assert(type_ == kMedium);
     assert(meta->size() == sc_->index2size(index_));
     LockGuard guard(lock_);
     auto [it, ins] = runs_.insert({run, RunBits(meta->size(), meta->count(), meta, run)});
     assert(ins == true);
-    it->second.reboot(meta);
-    meta->cond() = kPure;
-    persist_write_back(&meta->cond(), sizeof(RunCond));
+    it->second.reload(meta);
   }
 
   /**
@@ -248,10 +243,10 @@ class Arena {
    * @param meta the corresponding small run management meta
    * @param run the start address of the corresponding run
    * */
-  void reboot(SmallMeta* meta, void* run) {
+  void reload(SmallMeta* meta, void* run) {
     assert(meta->arena() == index_);
     size_t bid = sc_->size2index(meta->size());
-    bins_[bid].reboot(meta, run);
+    bins_[bid].reload(meta, run);
   }
 
   /**
@@ -259,10 +254,10 @@ class Arena {
    * @param meta the corresponding medium run management meta
    * @param run the start address of the corresponding run
    * */
-  void reboot(MediumMeta* meta, void* run) {
+  void reload(MediumMeta* meta, void* run) {
     assert(meta->arena() == index_);
     size_t bid = sc_->size2index(meta->size());
-    bins_[bid].reboot(meta, run);
+    bins_[bid].reload(meta, run);
   }
 
   /**

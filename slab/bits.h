@@ -79,7 +79,7 @@ class RunBits {
   /**
    * @brief reload bits_ through meta
    * */
-  void reboot(SmallMeta* meta) {
+  void reload(SmallMeta* meta) {
     assert((void*) meta == meta_);
     assert(meta->count() == count_ && meta->size() == size_);
     if(count_ > kUnitBits) {
@@ -101,13 +101,13 @@ class RunBits {
         }
       }
     }
-    assert(alloc_ != 0);
+    assert(alloc_ >= 0 && alloc_ < count_);
   }
 
   /**
    * @brief reload bits_ through meta
    * */
-  void reboot(MediumMeta* meta) {
+  void reload(MediumMeta* meta) {
     assert((void*) meta == meta_ && count_ <= kUnitBits);
     assert(meta->count() == count_ && meta->size() == size_);
     assert(bits_ == 0 && alloc_ == 0);
@@ -116,13 +116,13 @@ class RunBits {
         bits_ |= (0x01ul << ind), alloc_++;
       }
     }
-    assert(alloc_ != 0);
+    assert(alloc_ >= 0 && alloc_ < count_);
   }
 
   /**
    * @brief reload bits_ through desc
    * */
-  void reboot(ExtentDesc* desc) {
+  void reload(ExtentDesc* desc) {
     assert((void*) desc == meta_ && count_ <= kUnitBits);
     assert(desc->count() == count_ && desc->size() == size_);
     assert(bits_ == 0 && alloc_ == 0);
@@ -131,7 +131,7 @@ class RunBits {
         bits_ |= (0x01ul << ind), alloc_++;
       }
     }
-    assert(alloc_ != 0);
+    assert(alloc_ >= 0 && alloc_ < count_);
   }
 
   /**
@@ -145,10 +145,12 @@ class RunBits {
       return ((SmallMeta*) meta_)->token(idx);
     } else if(type == kMedium) {
       assert(((MediumMeta*) meta_)->size() == size_);
-      return ((MediumMeta*) meta_)->token(idx);
+      return ((MediumMeta*)
+        meta_)->token(idx);
     } else {
       assert(type == kLarge && ((ExtentDesc*) meta_)->size() == size_);
-      return ((ExtentDesc*) meta_)->token(idx);
+      return ((ExtentDesc*)
+        meta_)->token(idx);
     }
   }
 
@@ -236,7 +238,7 @@ class RunBits {
   }
 
   /**
-   * @brief persistently mark the run as polluted/half-used for fast recovery
+   * @brief persistently mark the run as polluted/half-used for fast reload
    * */
   void mark_polluted(RegionType type) {
     assert(type == kSmall || type == kMedium);
@@ -245,7 +247,8 @@ class RunBits {
       cond = kPolluted;
       persist_write_back(&cond, sizeof(RunCond));
     } else {
-      RunCond& cond = ((MediumMeta*) meta_)->cond();
+      RunCond& cond = ((MediumMeta*)
+        meta_)->cond();
       cond = kPolluted;
       persist_write_back(&cond, sizeof(RunCond));
     }

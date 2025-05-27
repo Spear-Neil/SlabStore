@@ -39,7 +39,7 @@ class alignas(kPageSize) MetaHead {
   StatCode stat_;      // nvm-allocator stat
   size_t size_;        // pool size (extent segment size)
   size_t mind_;        // index to the valid meta
-  pptr64_t occupied_;  // half-used extents (have free regions, all runs may have been allocated), for fast recovery
+  pptr64_t occupied_;  // half-used extents (have free regions, all runs may have been allocated), for fast recover
   pptr64_t ext_desc_;  // start address of ExtDesc Segment
   size_t ext_total_;   // total extent number (kExtentSize per Extent)
   pptr64_t med_meta_;  // start address of MedMeta Segment
@@ -315,7 +315,7 @@ class alignas(kPageSize) MetaHead {
         assert(desc->type() != kInvalid);
         extents.push_back(desc);
         next = (ExtentDesc*) desc->next().load();
-        desc->next() = nullptr;
+        desc->next() = nullptr; // it can be left out
         persist_write_back(desc, sizeof(ExtentDesc));
       }
 
@@ -330,6 +330,41 @@ class alignas(kPageSize) MetaHead {
 
     assert(stat_ == kVolatile);
     return false;
+  }
+
+  /**
+   * @brief rollback/resume outstanding extent allocation/release transactions before recover
+   * @details there are three cases in system crashes: 1> crash on pool initialization, 2> crash
+   * during allocation, 3> crash when closing the pool. We do not deal with the first case. As for
+   * the second and third case, they all need full pool scan.
+   * */
+  void resume() {
+    assert(stat_ == kVolatile);
+    /* First, process all half-used extents if crash when closing the pool */
+    ExtentDesc* desc = (ExtentDesc*) occupied_.load(), * next;
+    for(; desc != nullptr; desc = next) {
+      assert(desc->type() != kInvalid);
+      next = (ExtentDesc*) desc->next().load();
+      desc->next() = nullptr;  // it can be left out
+      persist_write_back(desc, sizeof(ExtentDesc));
+    }
+    if(occupied_ != nullptr) {
+      occupied_ = nullptr;
+      persist_write_back(this, kCacheLineSize);
+    }
+
+    /* Second, rollback/resume outstanding extent allocation/release. For allocation request that does not
+     * involve extent reclamation, no additional operation is needed. For allocation request that reuses
+     * extents in the reclaimed list, an extent may have been initialized but haven't been allocated.
+     * For release request, an extent may have been released but haven't been destructed. */
+    DescMeta& meta = meta_[mind_];
+    desc = (ExtentDesc*) meta.ext_free.load();
+    // at most one extent was being reclaimed or released
+    if(desc != nullptr) {
+      desc->type() = kInvalid;
+      persist_write_back(desc, sizeof(ExtentDesc));
+    }
+    persist_wait_finish();
   }
 
   /**
@@ -403,6 +438,11 @@ class alignas(kPageSize) MetaHead {
    * @brief pool size (extent segment size)
    * */
   size_t size() const { return size_; }
+
+  /**
+   * @brief total used extent count
+   * */
+  size_t count() const { return meta_[mind_].ext_used; }
 
   /**
    * @brief translate index into pointer to corresponding extent descriptor

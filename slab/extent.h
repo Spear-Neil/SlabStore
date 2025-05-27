@@ -13,6 +13,7 @@
 #include <string>
 #include <tuple>
 #include <vector>
+#include <atomic>
 
 #include "const.h"
 #include "desc.h"
@@ -79,6 +80,31 @@ class ExtentCase {
   }
 
  public:
+  class RecoverContainer {
+    ExtentCase* ext_case_;
+    std::atomic<size_t> index_; // currently processing extent index
+
+   public:
+    RecoverContainer(ExtentCase* ext_case) : ext_case_(ext_case), index_(0) {}
+
+    ~RecoverContainer() = default;
+
+    RecoverContainer(const RecoverContainer&) = delete;
+
+    RecoverContainer& operator=(const RecoverContainer&) = delete;
+
+    /**
+     * @brief get next extent descriptor for recover
+     * */
+    ExtentDesc* next() {
+      size_t ind = index_.fetch_add(1);
+      size_t count = ext_case_->meta_.head().count();
+      if(ind >= count) return nullptr;
+      return ext_case_->meta_.head().descriptor(ind);
+    }
+  };
+
+ public:
   ExtentCase() : lock_(), path_(), size_(-1), meta_(), extent_() {}
 
   ~ExtentCase() = default;
@@ -108,6 +134,15 @@ class ExtentCase {
    * */
   bool reboot(std::vector<ExtentDesc*>& extents) {
     return meta_.head().reboot(extents);
+  }
+
+  /**
+   * @brief rollback/execute outstanding extent allocation/release transactions before recover
+   * @return a RecoverContainer for concurrently scanning the pool
+   * */
+  RecoverContainer resume() {
+    meta_.head().resume();
+    return RecoverContainer(this);
   }
 
   /**

@@ -122,6 +122,17 @@ class alignas(kCacheLineSize) ExtentDesc {
   }
 
   /**
+   * @brief check if all regions are used
+   * */
+  bool half_used() {
+    assert(type_ == kLarge);
+    for(size_t ind = 0; ind < count_; ind++) {
+      if(!large_[ind].busy()) return true;
+    }
+    return false;
+  }
+
+  /**
    * @brief region type in current extent
    * */
   RegionType& type() { return type_; }
@@ -296,7 +307,7 @@ class SmallMeta {
   uint16_t arena_;    // the index of corresponding arena in global arena array
   uint16_t count_;    // total region number
   pptr64_t next_;     // the next management meta
-  RunCond cond_;      // usage condition of the run, for fast recovery after normal close
+  RunCond cond_;      // usage condition of the run, for fast reboot after normal close
   token_t tokens_[];  // for small allocation as persistent token
 
   // todo: using free space for adjusting the layout of tokens to avoid cache line flush at the same line
@@ -314,6 +325,16 @@ class SmallMeta {
     for(size_t idx = 0; idx < count; idx++) tokens_[idx].fire(false);
     persist_write_back(this, sizeof(SmallMeta) + count * sizeof(token_t));
     persist_wait_finish();
+  }
+
+  /**
+   * @brief check if all regions are used
+   * */
+  bool half_used() {
+    for(size_t ind = 0; ind < count_; ind++) {
+      if(!tokens_[ind].busy()) return true;
+    }
+    return false;
   }
 
   /**
@@ -352,7 +373,7 @@ class alignas(kCacheLineSize) MediumMeta {
   uint16_t arena_;     // the index of corresponding arena in global arena array
   uint16_t count_;     // total region number
   pptr32_t next_;      // the next region management meta
-  RunCond cond_;       // usage condition of the run, for fast recovery after normal close
+  RunCond cond_;       // usage condition of the run, for fast reboot after normal close
   token_t tokens_[51]; // for medium allocation as persistent token
 
  public:
@@ -370,6 +391,16 @@ class alignas(kCacheLineSize) MediumMeta {
     for(int ind = 0; ind < count; ind++) tokens_[ind].fire(false);
     persist_write_back(this, sizeof(MediumMeta));
     persist_wait_finish();
+  }
+
+  /**
+   * @brief check if all regions are used
+   * */
+  bool half_used() {
+    for(size_t ind = 0; ind < count_; ind++) {
+      if(!tokens_[ind].busy()) return true;
+    }
+    return false;
   }
 
   /**

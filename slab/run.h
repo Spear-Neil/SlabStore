@@ -123,10 +123,10 @@ class RunBin {
   }
 
   /**
-   * @brief reload a half-used extent (including free regions)
+   * @brief reload a small extent into current RunBin
    * @param desc descriptor to the extent (kSmall)
    * */
-  void small_reboot(ExtentDesc* desc) {
+  void small_reload(ExtentDesc* desc) {
     assert(type_ == kSmall && desc->size() == rsize_);
     LockGuard guard(lock_);
     // check if the extent has any runs free
@@ -136,10 +136,10 @@ class RunBin {
   }
 
   /**
-   * @brief reload a half-used extent (including free regions)
+   * @brief reload a medium extent into current RunBin
    * @param desc descriptor to the extent (kMedium)
    * */
-  void medium_reboot(ExtentDesc* desc) {
+  void medium_reload(ExtentDesc* desc) {
     assert(type_ == kMedium && desc->size() == rsize_);
     LockGuard guard(lock_);
     // check if the extent has any runs free
@@ -305,16 +305,16 @@ class LargeBin {
   }
 
   /**
-   * @brief reload a half-used run (kLarge extent) into current LargeBin
-   * @param desc descriptor to the half-used run (kLarge extent)
+   * @brief reload a run (kLarge extent) into current LargeBin
+   * @param desc descriptor to the run (kLarge extent)
    * */
-  void reboot(ExtentDesc* desc) {
+  void reload(ExtentDesc* desc) {
     assert(desc->size() == size_ && desc->type() == kLarge);
     void* ext = ext_case_->extent(desc);
     LockGuard guard(lock_);
     auto [it, ins] = runs_.insert({ext, RunBits(desc->size(), desc->count(), desc, ext)});
     assert(ins == true);
-    it->second.reboot(desc);
+    it->second.reload(desc);
   }
 
   /**
@@ -415,34 +415,44 @@ class RunCase {
   RunCase& operator=(const RunCase&) = delete;
 
   /**
-   * @brief reload a half-used extent into current RunCase
-   * @param desc descriptor to the half-used extent (kSmall)
+   * @brief reload a small extent into current RunCase
+   * @param desc descriptor to the extent (kSmall)
    * */
-  void small_reboot(ExtentDesc* desc) {
+  void small_reload(ExtentDesc* desc) {
+    // only check if all runs in the extent have been fully allocated, reload those containing free runs
     assert(desc->rcase() == index_ && desc->type() == kSmall);
     size_t rbid = desc2rbid_[{desc->type(), desc->size()}];
-    rbins_[rbid].small_reboot(desc);
+    rbins_[rbid].small_reload(desc);
   }
 
   /**
-   * @brief reload a half-used extent into current RunCase
-   * @param desc descriptor to the half-used extent (kSmall)
+   * @brief reload a medium extent into current RunCase
+   * @param desc descriptor to the extent (kMedium)
    * */
-  void medium_reboot(ExtentDesc* desc) {
+  void medium_reload(ExtentDesc* desc) {
+    // only check if all runs in the extent have been fully allocated, reload those containing free runs
     assert(desc->rcase() == index_ && desc->type() == kMedium);
     size_t rbid = desc2rbid_[{desc->type(), desc->size()}];
-    rbins_[rbid].medium_reboot(desc);
+    rbins_[rbid].medium_reload(desc);
   }
 
   /**
    * @brief reload a half-used run (kLarge extent) into current RunCase
    * @param desc descriptor to the half-used run (kLarge extent)
    * */
-  void large_reboot(ExtentDesc* desc) {
+  void large_reload(ExtentDesc* desc) {
     assert(desc->type() == kLarge && desc->rcase() == index_);
     size_t bid = index_most1((desc->size() - 1) / kMaxMediumSize);
     assert(bid < kLargeTypeCount);
-    lbins_[bid].reboot(desc);
+    lbins_[bid].reload(desc);
+  }
+
+  /**
+   * @brief recover/restore a large extent
+   * @param desc descriptor to the extent (kLarge)
+   * */
+  void large_recover(ExtentDesc* desc) {
+
   }
 
   /**
