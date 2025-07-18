@@ -54,7 +54,7 @@ namespace SlabStore {
 using util::index_least0;
 using util::popcount;
 
-enum RegionType : uint32_t { kSmall, kMedium, kLarge, kInvalid };
+enum RegionType : uint32_t { kSmall, kMedium, kLarge, kInvalid, kTypeCount};
 
 /**
  * @brief Run's usage condition after normal allocator close
@@ -65,7 +65,7 @@ enum RunCond : uint8_t { kPure, kPolluted };
 
 class alignas(kCacheLineSize) ExtentDesc {
   RegionType type_;       // region type, means how to use an extent
-  uint32_t rcase_;        // the index of corresponding RunCase in global RunCase array
+  uint32_t rcase_;        // index of the corresponding RunCase in the global RunCase array
   uint32_t size_;         // run size (small & medium) or region size (large)
   uint32_t count_;        // total run number or region number
   pptr64_t next_;         // points to next free extent descriptor

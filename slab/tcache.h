@@ -23,6 +23,7 @@
 namespace SlabStore {
 
 using util::rounddown;
+using util::branch_unlikely;
 
 /**
  * @brief thread local cache bin for a specific slab size class
@@ -60,7 +61,7 @@ class CacheBin {
       uintptr_t start = (uintptr_t) meta + rsize - count * size;
       size_t index = ((uintptr_t) ptr - start) / size;
       assert(index * size + start == (uintptr_t) ptr);
-      arenas_[meta->arena()].release(meta, meta, index);
+      arenas_[meta->arena()].release(meta, meta, index, false);
     } else {
       auto meta = (MediumMeta*) desc->runs() + rid;
       size_t size = meta->size();
@@ -68,7 +69,7 @@ class CacheBin {
       uintptr_t start = (uintptr_t) ext + rsize * rid;
       size_t index = ((uintptr_t) ptr - start) / size;
       assert(index * size + start == (uintptr_t) ptr);
-      arenas_[meta->arena()].release(meta, (void*) start, index);
+      arenas_[meta->arena()].release(meta, (void*) start, index, false);
     }
   }
 
@@ -153,6 +154,7 @@ class ThreadCache {
   ExtentCase* ext_case_;  // the global extent case for release operation to determine the size of regions
   SizeClass* sc_;         // for computing index of CacheBin for small & medium allocation
   RunCase* run_cases_;    // the global RunCase array
+  Arena* arenas_;         // the global arenas array
   Arena* arena_;          // corresponding arena
   CacheBin bins_[kNSlabsCached]; // cache bins for small and medium slab size class
 
@@ -163,18 +165,20 @@ class ThreadCache {
    * @brief release a large region
    * @param desc the corresponding extent descriptor
    * @param prt the start address of the region
+   * @param recover the region is allocated during recovering
    * */
-  void large_release(ExtentDesc* desc, void* ptr) {
+  void large_release(ExtentDesc* desc, void* ptr, bool recover) {
     assert(desc->type() == kLarge && (uintptr_t) ptr % desc->size() == 0);
-    run_cases_[desc->rcase()].large_release(desc, ptr);
+    run_cases_[desc->rcase()].large_release(desc, ptr, recover);
   }
 
   /**
    * @brief release a medium region
    * @param desc the corresponding extent descriptor
    * @param prt the start address of the region
+   * @param recover the region is allocated during recovering
    * */
-  void medium_release(ExtentDesc* desc, void* ptr) {
+  void medium_release(ExtentDesc* desc, void* ptr, bool recover) {
     assert(desc->type() == kMedium);
     uintptr_t ext = rounddown((uintptr_t) ptr, kExtentSize);
     size_t rsize = desc->size(), rid = ((uintptr_t) ptr - ext) / rsize;
@@ -186,16 +190,21 @@ class ThreadCache {
     assert(index * size + start == (uintptr_t) ptr);
     token_t* token = meta->token(index);
     token->fire(); // persistently mark this region as free
-    size_t bin_idx = sc_->size2index(size);
-    bins_[bin_idx].release({token, ptr});
+    if(branch_unlikely(recover)) {
+      arenas_[meta->arena()].release(meta, (void*) start, index, true);
+    } else {
+      size_t bin_idx = sc_->size2index(size);
+      bins_[bin_idx].release({token, ptr});
+    }
   }
 
   /**
    * @brief release a small region
    * @param desc the corresponding extent descriptor
    * @param prt the start address of the region
+   * @param recover the region is allocated during recovering
    * */
-  void small_release(ExtentDesc* desc, void* ptr) {
+  void small_release(ExtentDesc* desc, void* ptr, bool recover) {
     assert(desc->type() == kSmall);
     uintptr_t ext = rounddown((uintptr_t) ptr, kExtentSize);
     size_t rsize = desc->size(), rid = ((uintptr_t) ptr - ext) / rsize;
@@ -207,13 +216,17 @@ class ThreadCache {
     assert(index * size + start == (uintptr_t) ptr);
     token_t* token = meta->token(index);
     token->fire(); // persistently mark this region as free
-    size_t bin_idx = sc_->size2index(size);
-    bins_[bin_idx].release({token, ptr});
+    if(branch_unlikely(recover)) { // bypass thread local cache
+      arenas_[meta->arena()].release(meta, meta, index, true);
+    } else {
+      size_t bin_idx = sc_->size2index(size);
+      bins_[bin_idx].release({token, ptr});
+    }
   }
 
  public:
   ThreadCache(ExtentCase* ext_case, SizeClass* sc, RunCase* run_cases, Arena* arenas, Arena* arena) :
-    ext_case_(ext_case), sc_(sc), run_cases_(run_cases), arena_(arena), bins_{} {
+    ext_case_(ext_case), sc_(sc), run_cases_(run_cases), arenas_(arenas), arena_(arena), bins_{} {
     assert(arena != nullptr && ext_case != nullptr && sc != nullptr);
     assert(run_cases != nullptr && arenas != nullptr);
     arena_->nbinds()++;  // bind current thread cache to its corresponding arena
@@ -238,9 +251,17 @@ class ThreadCache {
   /**
    * @brief allocate a region
    * @param size region size
+   * @param recover in the processing of recovering
    * @return the start address of the region and its token
    * */
-  region_t acquire(size_t size) {
+  region_t acquire(size_t size, bool recover) {
+    // allocate regions from clean extents when recovering, because these regions
+    // should not be iterated for rebuilding meta-data and user-defined data structure
+    if(branch_unlikely(recover)) { // bypass thread local cache
+      return arena_->recover_acquire(size);
+    }
+
+    // normal allocation
     if(size <= kMaxMediumSize) {
       if(size == 0) return {nullptr, nullptr};
       // small or medium region size, allocate a region from thread cache
@@ -257,17 +278,22 @@ class ThreadCache {
   /**
    * @brief free a region
    * @param ptr the start address of the region
+   * @param recover in the processing of recovering
    * */
-  void release(void* ptr) {
-    if(ptr == nullptr) return;
+  void release(void* ptr, bool recover) {
+    if(branch_unlikely(ptr == nullptr)) return;
+
     ExtentDesc* desc = ext_case_->descriptor(ptr);
+    if(branch_unlikely(recover)) { // check whether the region is allocated during recovering
+      recover = ext_case_->recover_extent(desc);
+    }
     switch(desc->type()) {
       case kSmall:
-        return small_release(desc, ptr);
+        return small_release(desc, ptr, recover);
       case kMedium:
-        return medium_release(desc, ptr);
+        return medium_release(desc, ptr, recover);
       case kLarge:
-        return large_release(desc, ptr);
+        return large_release(desc, ptr, recover);
       default:
         fprintf(stderr, "[ERROR]: release, unknown type\n");
         exit(EXIT_FAILURE);

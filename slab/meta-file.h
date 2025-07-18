@@ -305,7 +305,7 @@ class alignas(kPageSize) MetaHead {
    * */
   bool reboot(std::vector<ExtentDesc*>& extents) {
     if(stat_ == kChaotic || (stat_ != kConsistent && stat_ != kVolatile)) {
-      fprintf(stderr, "[ERROR]: pool initialization failed\n");
+      fprintf(stderr, "[ERROR]: pool initialization failed, try to create a new one\n");
       exit(EXIT_FAILURE);
     }
 

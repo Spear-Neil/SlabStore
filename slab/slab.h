@@ -37,7 +37,7 @@ class Allocator {
   RunCase* run_cases_;   // run (de-)allocation & large region (de-)allocation
   size_t narenas_;       // the number of arenas
   Arena* arenas_;        // small & medium region allocation
-  bool state_;           // allocator state (whether the allocator is ok for allocation)
+  bool ok_;              // allocator state (whether the allocator is ok for allocation)
   bool recovering;       // in the process of rebuilding allocator metadata and user-defined data structure
 
   static constexpr size_t kCorePerArena = SlabConst::kCorePerArena;
@@ -270,9 +270,22 @@ class Allocator {
     for(auto reg : regions) rebuild(reg);
   }
 
+  /**
+   * @brief do some post-recovery finishing tasks
+   * */
+  void finish_recover() {
+    for(size_t aid = 0; aid < narenas_; aid++) {
+      arenas_[aid].finish_recover();
+    }
+    for(size_t rid = 0; rid < nruns_; rid++) {
+      run_cases_[rid].finish_recover();
+    }
+    ext_case_->finish_recover();
+  }
+
  public:
   Allocator() : ext_case_(nullptr), sc_(nullptr), nruns_(-1), run_cases_(nullptr),
-                narenas_(-1), arenas_(nullptr), state_(false), recovering(false) {
+                narenas_(-1), arenas_(nullptr), ok_(false), recovering(false) {
     ext_case_ = new ExtentCase();
     sc_ = new SizeClass();
     size_t ncpus = ncpus_online();
@@ -313,10 +326,10 @@ class Allocator {
     if(size == -1) { reboot = ext_case_->open(path); }
     else { reboot = ext_case_->open(path, size); }
 
-    if(reboot) {
+    if(reboot) { // reboot an existing pool
       std::vector<ExtentDesc*> extents;
-      state_ = ext_case_->reboot(extents);
-      if(state_) { // reboot after normal shutdown/exit
+      ok_ = ext_case_->reboot(extents);
+      if(ok_) { // reboot after normal shutdown/exit
         for(ExtentDesc* desc : extents) {
           assert(desc->next() == nullptr);
           // It's unlikely that there are too many half-used extents
@@ -336,7 +349,7 @@ class Allocator {
           }
         }
       }
-    } else { state_ = true; }
+    } else { ok_ = true; } // new pool
   }
 
   /**
@@ -344,10 +357,10 @@ class Allocator {
    * memory pool is ready for allocation; false means the memory pool is closed
    * incorrectly so the meta-info needs to be rebuilt
    * */
-  bool good() const { return state_; }
+  bool good() const { return ok_; }
 
   /**
-   * @brief call this function to rebuild allocator's metadata and iterate all objects/regions
+   * @brief invoke this function to rebuild allocator's metadata and iterate all objects/regions
    * to rebuild user defined data structure after power failure or system crash
    * @param rebuild functor (function object) for rebuild user defined data structure
    * (needs to be thread-safe if nthd is greater than 1)
@@ -355,7 +368,7 @@ class Allocator {
    * @param nid the start numa node id which recover threads are bound to
    * */
   void recover(const std::function<void(region_t)>& rebuild, size_t nthd = 1, size_t nid = 0) {
-    assert(state_ == false && recovering == false);
+    assert(ok_ == false && recovering == false);
     recovering = true;
     std::vector<std::thread> workers;
     PinningMap pin;
@@ -370,7 +383,7 @@ class Allocator {
         ExtentDesc* desc = recovery.next();
         for(; desc != nullptr; desc = recovery.next()) {
           RegionType type = desc->type();
-          if(type == kInvalid) continue; // reclaimed/free extent
+          assert(type != kInvalid);
           switch(type) {
             case kSmall:
               small_recover(rebuild, desc);
@@ -391,7 +404,8 @@ class Allocator {
     for(int tid = 0; tid < nthd; tid++) {
       workers[tid].join();
     }
-    state_ = true, recovering = false;
+    finish_recover();
+    ok_ = true, recovering = false;
   }
 
   /**
@@ -406,9 +420,11 @@ class Allocator {
    * a persistent memory block is up to your application scenario
    * */
   region_t acquire(size_t size) {
-    assert(state_ == true || recovering == true); // call recover for rebuild allocator and user defined data structure
+    // if !ok && !recovering, call recover for rebuild allocator and user defined data structure
+    assert(ok_ == true || recovering == true);
     ThreadCache& tcache = builder().locate();
-    return tcache.acquire(size);
+    // specialized allocation during recovering, because rebuilder may do allocation
+    return tcache.acquire(size, recovering);
   }
 
   /**
@@ -418,9 +434,11 @@ class Allocator {
    * when the allocator is closing/rebooting.
    * */
   void release(void* ptr) {
-    assert(state_ == true || recovering == true); // call recover for rebuild allocator and user defined data structure
+    // if !ok && !recovering, call recover for rebuild allocator and user defined data structure
+    assert(ok_ == true || recovering == true);
     ThreadCache& tcache = builder().locate();
-    tcache.release(ptr);
+    // as for release, we need to check whether the upcoming free region is allocated during recovering phase
+    tcache.release(ptr, recovering);
   }
 };
 

@@ -39,8 +39,11 @@ class ArenaBin {
   RegionType type_;    // type of regions in current ArenaBin
   RunCase* run_case_;  // corresponding RunCase for run (de-)allocation
   SizeClass* sc_;      // mutual conversion between slab class index and size
+
+  static constexpr size_t kBinCount = 2;
   // [the start address of a run, RunBits]
-  std::unordered_map<void*, RunBits> runs_; // non-full (non-empty, half-used) runs for allocation
+  std::unordered_map<void*, RunBits> bins_[kBinCount]; // non-full (non-empty, half-used) runs for allocation
+  // bin 0 is used for normal region allocation, bin 1 is used for allocation during recovering
   typedef std::unordered_map<void*, RunBits>::iterator iterator;
 
   static constexpr size_t kBucketsCount = 32;
@@ -52,40 +55,43 @@ class ArenaBin {
 
  private:
   /**
-   * @brief find a non-empty run in runs, or acquire a new run
+   * @brief select a non-empty run in bins, or acquire a new run
+   * @param recover select a run from recovering bin
    * @return an iterator to a run in runs
    * */
-  iterator select_run() {
+  iterator select_run(bool recover) {
+    size_t bid = recover ? 1 : 0;
     assert(type_ == kSmall || type_ == kMedium);
-    if(runs_.empty()) {
+    if(bins_[bid].empty()) {
       if(type_ == kSmall) {
-        auto [meta, run] = run_case_->srun_acquire(arena_, index_);
+        auto [meta, run] = run_case_->srun_acquire(arena_, index_, recover);
         assert((void*) meta == (void*) run);
         size_t rsize = SlabConst::kRunSizeTab[SlabConst::kCBin2RBin[index_ / kNSlabsPerGrp]];
         void* objs = (void*) ((uintptr_t) run + rsize - meta->count() * meta->size());
-        if(run) runs_.insert({run, RunBits(meta->size(), meta->count(), meta, objs)});
+        if(run) bins_[bid].insert({run, RunBits(meta->size(), meta->count(), meta, objs)});
       } else {
-        auto [meta, run] = run_case_->mrun_acquire(arena_, index_);
-        if(run) runs_.insert({run, RunBits(meta->size(), meta->count(), meta, run)});
+        auto [meta, run] = run_case_->mrun_acquire(arena_, index_, recover);
+        if(run) bins_[bid].insert({run, RunBits(meta->size(), meta->count(), meta, run)});
       }
     }
-    return runs_.begin();
+    return bins_[bid].begin();
   }
 
  public:
-  ArenaBin() : arena_(-1), index_(-1), type_(kInvalid), run_case_(nullptr), sc_(nullptr) {}
+  ArenaBin() : arena_(-1), index_(-1), type_(kInvalid), run_case_(nullptr), sc_(nullptr), bins_{} {}
 
   ~ArenaBin() {
     assert(type_ == kSmall || type_ == kMedium);
-    for(auto& [run, bits] : runs_) {
+    assert(bins_[1].empty()); // bin 1 should always be empty, except during recovering
+    for(auto& [run, bits] : bins_[0]) {
       // release all runs whose regions are all free (not in use)
       // else inform the corresponding RunCase it has a half-used run
       bool release = bits.full();
       if(type_ == kSmall) {
-        run_case_->srun_release(run, index_, release);
+        run_case_->srun_release(run, index_, release, false);
         if(!release) { bits.mark_polluted(type_); }
       } else {
-        run_case_->mrun_release(run, index_, release);
+        run_case_->mrun_release(run, index_, release, false);
         if(!release) { bits.mark_polluted(type_); }
       }
     }
@@ -94,6 +100,14 @@ class ArenaBin {
   ArenaBin(const ArenaBin&) = delete;
 
   ArenaBin& operator=(const ArenaBin&) = delete;
+
+  /**
+   * @brief some post-recovery finishing tasks
+   * */
+  void finish_recover() {
+    bins_[0].merge(bins_[1]);
+    assert(bins_[1].empty());
+  }
 
   /**
    * @brief ArenaBin initialization
@@ -106,7 +120,7 @@ class ArenaBin {
     type_ = (index <= kMaxSmallIndex) ? kSmall : kMedium;
     assert(index < kNSlabsCached && run_case != nullptr);
     assert(sc != nullptr);
-    runs_.reserve(kBucketsCount);
+    for(auto& bin : bins_) bin.reserve(kBucketsCount);
   }
 
   /**
@@ -120,7 +134,7 @@ class ArenaBin {
     LockGuard guard(lock_);
     size_t rsize = SlabConst::kRunSizeTab[SlabConst::kCBin2RBin[index_ / kNSlabsPerGrp]];
     void* objs = (void*) ((uintptr_t) run + rsize - meta->count() * meta->size());
-    auto [it, ins] = runs_.insert({run, RunBits(meta->size(), meta->count(), meta, objs)});
+    auto [it, ins] = bins_[0].insert({run, RunBits(meta->size(), meta->count(), meta, objs)});
     assert(ins == true);
     it->second.reload(meta);
   }
@@ -129,12 +143,13 @@ class ArenaBin {
    * @brief reload a medium run back to current ArenaBin
    * @param meta the corresponding medium run management meta
    * @param run the start address of the corresponding run
+   * @param recover reload runs into recovering bin
    * */
   void reload(MediumMeta* meta, void* run) {
     assert(type_ == kMedium);
     assert(meta->size() == sc_->index2size(index_));
     LockGuard guard(lock_);
-    auto [it, ins] = runs_.insert({run, RunBits(meta->size(), meta->count(), meta, run)});
+    auto [it, ins] = bins_[0].insert({run, RunBits(meta->size(), meta->count(), meta, run)});
     assert(ins == true);
     it->second.reload(meta);
   }
@@ -143,39 +158,44 @@ class ArenaBin {
    * @brief restock regions for a certain CacheBin
    * @param regions the region container of the CacheBin
    * @param restock restock quantity
+   * @param recover restock regions from recovering bin
    * */
-  void fill_cache_bin(std::deque<region_t>& regions, size_t restock) {
+  void fill_cache_bin(std::deque<region_t>& regions, size_t restock, bool recover) {
+    size_t bid = recover ? 1 : 0;
     LockGuard guard(lock_);
     while(regions.size() < restock) {
-      auto rit = select_run();
-      if(rit == runs_.end()) break; // no more runs
+      auto rit = select_run(recover);
+      if(rit == bins_[bid].end()) break; // no more runs
       RunBits& rbits = rit->second;
       rbits.fill_regions(regions, restock, type_);
       // no more regions in the current run, remove it from the hash map
-      if(rbits.empty()) { runs_.erase(rit); }
+      if(rbits.empty()) { bins_[bid].erase(rit); }
     }
   }
 
   /**
    * @brief release a small region specified by the index back to current ArenaBin
+   * @param meta the corresponding small run management meta
    * @param run the start address of the corresponding run
    * @param index the region's index in the run
+   * @param recover release regions back to recovering bin
    * */
-  void release(SmallMeta* meta, void* run, size_t index) {
+  void release(SmallMeta* meta, void* run, size_t index, bool recover) {
     assert(type_ == kSmall && meta->size() == sc_->index2size(index_));
+    size_t bid = recover ? 1 : 0;
     LockGuard guard(lock_);
-    auto it = runs_.find(run);
-    if(it == runs_.end()) { // this extent has been fully allocated, reconstruct
+    auto it = bins_[bid].find(run);
+    if(it == bins_[bid].end()) { // this extent has been fully allocated, reconstruct
       size_t rsize = SlabConst::kRunSizeTab[SlabConst::kCBin2RBin[index_ / kNSlabsPerGrp]];
       void* objs = (void*) ((uintptr_t) run + rsize - meta->count() * meta->size());
-      it = runs_.insert({run, RunBits(meta->size(), meta->count(), meta, objs, true)}).first;
+      it = bins_[bid].insert({run, RunBits(meta->size(), meta->count(), meta, objs, true)}).first;
     }
     RunBits& rbits = it->second;
     rbits.dealloc_region(index);
     // release free run back to RunCase
-    if(rbits.full() && runs_.size() > kRunHoldCount) {
+    if(rbits.full() && bins_[bid].size() > kRunHoldCount) {
       assert(run == it->first);
-      runs_.erase(it), run_case_->srun_release(run, index_);
+      bins_[bid].erase(it), run_case_->srun_release(run, index_, true, recover);
     }
   }
 
@@ -183,20 +203,22 @@ class ArenaBin {
    * @brief release a medium region specified by the index back to current ArenaBin
    * @param run the start address of the corresponding run
    * @param index the region's index in the run
+   * @param recover release regions back to recovering bin
    * */
-  void release(MediumMeta* meta, void* run, size_t index) {
+  void release(MediumMeta* meta, void* run, size_t index, bool recover) {
     assert(type_ == kMedium && meta->size() == sc_->index2size(index_));
+    size_t bid = recover ? 1 : 0;
     LockGuard guard(lock_);
-    auto it = runs_.find(run);
-    if(it == runs_.end()) { // this extent has been fully allocated, reconstruct
-      it = runs_.insert({run, RunBits(meta->size(), meta->count(), meta, run, true)}).first;
+    auto it = bins_[bid].find(run);
+    if(it == bins_[bid].end()) { // this extent has been fully allocated, reconstruct
+      it = bins_[bid].insert({run, RunBits(meta->size(), meta->count(), meta, run, true)}).first;
     }
     RunBits& rbits = it->second;
     rbits.dealloc_region(index);
     // release free run back to RunCase
-    if(rbits.full() && runs_.size() > kRunHoldCount) {
+    if(rbits.full() && bins_[bid].size() > kRunHoldCount) {
       assert(run == it->first);
-      runs_.erase(it), run_case_->mrun_release(run, index_);
+      bins_[bid].erase(it), run_case_->mrun_release(run, index_, true, recover);
     }
   }
 };
@@ -239,6 +261,15 @@ class Arena {
   Arena& operator=(const Arena&) = delete;
 
   /**
+   * @brief some post-recovery finishing tasks
+   * */
+  void finish_recover() {
+    for(size_t bid = 0; bid < kNSlabsCached; bid++) {
+      bins_[bid].finish_recover();
+    }
+  }
+
+  /**
    * @brief reload a half-used small run back to current Arena
    * @param meta the corresponding small run management meta
    * @param run the start address of the corresponding run
@@ -274,7 +305,27 @@ class Arena {
    * */
   void fill_cache_bin(std::deque<region_t>& regions, size_t restock, size_t index) {
     assert(index < kNSlabsCached);
-    bins_[index].fill_cache_bin(regions, restock);
+    bins_[index].fill_cache_bin(regions, restock, false);
+  }
+
+  /**
+   * @brief allocate regions during recovering
+   * @param size region size
+   * @return the start address of the region and its token
+   * */
+  region_t recover_acquire(size_t size) {
+    if(size <= kMaxMediumSize) {
+      size_t bid = sc_->size2index(size);
+      assert(bid < kNSlabsCached);
+      std::deque<region_t> regions;
+      bins_[bid].fill_cache_bin(regions, 1, true);
+      if(regions.empty()) return {nullptr, nullptr};
+      return regions.front();
+    } else if(size <= kMaxLargeSize) {
+      run_case_->large_acquire(size, true);
+    }
+    // region size larger than kMaxLargeSize is not supported
+    return {nullptr, nullptr};
   }
 
   /**
@@ -282,11 +333,12 @@ class Arena {
    * @param meta the corresponding small run management meta
    * @param run the start address of the corresponding run
    * @param index the region's index in the run
+   * @param recover the region is allocated during recovering
    * */
-  void release(SmallMeta* meta, void* run, size_t index) {
-    assert(meta->arena() == index_);
+  void release(SmallMeta* meta, void* run, size_t index, bool recover) {
+    assert(meta == run && meta->arena() == index_);
     size_t bin_idx = sc_->size2index(meta->size());
-    bins_[bin_idx].release(meta, run, index);
+    bins_[bin_idx].release(meta, run, index, recover);
   }
 
   /**
@@ -294,11 +346,12 @@ class Arena {
    * @param meta the corresponding medium run management meta
    * @param run the start address of the corresponding run
    * @param index the region's index in the run
+   * @param recover the region is allocated during recovering
    * */
-  void release(MediumMeta* meta, void* run, size_t index) {
-    assert(meta->arena() == index_);
+  void release(MediumMeta* meta, void* run, size_t index, bool recover) {
+    assert(meta != run && meta->arena() == index_);
     size_t bin_idx = sc_->size2index(meta->size());
-    bins_[bin_idx].release(meta, run, index);
+    bins_[bin_idx].release(meta, run, index, recover);
   }
 
   /**
@@ -308,7 +361,7 @@ class Arena {
   region_t large_acquire(size_t size) {
     assert(size > kMaxMediumSize);
     assert(size <= kMaxLargeSize);
-    return run_case_->large_acquire(size);
+    return run_case_->large_acquire(size, false);
   }
 };
 

@@ -38,7 +38,10 @@ class RunBin {
   RegionType type_;       // region type of extents in current RunBin
   uint32_t rsize_;        // run size
   ExtentCase* ext_case_;  // extent (de-)allocation
-  std::unordered_map<void*, ExtentDesc*> exts_; // (start address of an extent, its descriptor)
+
+  static constexpr size_t kBinCount = 2;
+  // bin 0 for normal allocation, bin 1 for allocation during recovering
+  std::unordered_map<void*, ExtentDesc*> bins_[kBinCount]; // (start address of an extent, its descriptor)
   typedef std::unordered_map<void*, ExtentDesc*>::iterator iterator;
 
   static constexpr size_t kBucketsCount = 32;
@@ -50,13 +53,15 @@ class RunBin {
  private:
   /**
    * @brief select an extent from the RunBin or if the RunBin is empty, acquire a new extent
+   * @param recover do allocation from recovering bin
    * */
-  iterator select_ext() {
-    if(exts_.empty()) {
-      auto [desc, ext] = ext_case_->acquire(type_, rcase_, rsize_);
-      if(ext) exts_.insert({ext, desc}); // make sure get a valid extent
+  iterator select_ext(bool recover) {
+    size_t bid = recover ? 1 : 0;
+    if(bins_[bid].empty()) {
+      auto [desc, ext] = ext_case_->acquire(type_, rcase_, rsize_, recover);
+      if(ext) bins_[bid].insert({ext, desc}); // make sure get a valid extent
     }
-    return exts_.begin();
+    return bins_[bid].begin();
   }
 
   /**
@@ -64,7 +69,7 @@ class RunBin {
    * @param size region size in current run
    * @return the number of regions in a run
    * */
-  size_t small_region_count(size_t size) {
+  size_t small_region_count(size_t size) const {
     assert(type_ == kSmall);
     size_t count = rsize_ / size;
     while(true) {
@@ -81,7 +86,7 @@ class RunBin {
     * @param size region size in current run
     * @return the number of regions in a run
     * */
-  size_t medium_region_count(size_t size) {
+  size_t medium_region_count(size_t size) const {
     assert(type_ == kMedium);
     size_t count = rsize_ / size;
     // make region array size aligned to kPageSize for better physical space usage,
@@ -91,11 +96,12 @@ class RunBin {
   }
 
  public:
-  RunBin() : lock_(), rcase_(-1), type_(kInvalid), rsize_(-1), ext_case_(nullptr), exts_() {}
+  RunBin() : lock_(), rcase_(-1), type_(kInvalid), rsize_(-1), ext_case_(nullptr), bins_{} {}
 
   ~RunBin() {
     assert(type_ == kSmall || type_ == kMedium);
-    for(auto [ext, desc] : exts_) {
+    assert(bins_[1].empty()); // bin 1 should always be empy, except during recovering
+    for(auto [ext, desc] : bins_[0]) {
       assert(type_ == desc->type());
       // if any run in the extent is in-use, record it before allocator close
       // else release the extent back to ExtentCase
@@ -110,6 +116,14 @@ class RunBin {
   RunBin& operator=(const RunBin&) = delete;
 
   /**
+   * @brief some post-recovery finishing tasks
+   * */
+  void finish_recover() {
+    bins_[0].merge(bins_[1]);
+    assert(bins_[1].empty());
+  }
+
+  /**
    * @brief RunBin initialization
    * @param rcase the index of corresponding RunCase
    * @param type the region type of extents in current RunBin
@@ -119,7 +133,7 @@ class RunBin {
   void init(size_t rcase, RegionType type, size_t size, ExtentCase* ext_case) {
     assert(ext_case != nullptr && (type == kSmall || type == kMedium));
     rcase_ = rcase, type_ = type, rsize_ = size, ext_case_ = ext_case;
-    exts_.reserve(kBucketsCount);
+    for(auto& bin : bins_) bin.reserve(kBucketsCount);
   }
 
   /**
@@ -131,7 +145,7 @@ class RunBin {
     LockGuard guard(lock_);
     // check if the extent has any runs free
     if(desc->locate_fsrun() != desc->count()) {
-      exts_.insert({ext_case_->extent(desc), desc});
+      bins_[0].insert({ext_case_->extent(desc), desc});
     }
   }
 
@@ -144,7 +158,7 @@ class RunBin {
     LockGuard guard(lock_);
     // check if the extent has any runs free
     if(desc->locate_fmrun() != desc->count()) {
-      exts_.insert({ext_case_->extent(desc), desc});
+      bins_[0].insert({ext_case_->extent(desc), desc});
     }
   }
 
@@ -152,13 +166,15 @@ class RunBin {
    * @brief allocate a run for small allocation
    * @param arena the index of arena in the global arena array
    * @param size region size in current run
+   * @param recover do allocation from recovering bin
    * @return (meta of run, the start address of run)
    * */
-  srun_t srun_acquire(size_t arena, size_t size) {
+  srun_t srun_acquire(size_t arena, size_t size, bool recover) {
     assert(type_ == kSmall && size <= kMaxSmallSize);
+    size_t bid = recover ? 1 : 0;
     LockGuard guard(lock_);
-    auto it = select_ext();
-    if(it == exts_.end()) return {nullptr, nullptr}; // no more space
+    auto it = select_ext(recover);
+    if(it == bins_[bid].end()) return {nullptr, nullptr}; // no more space
 
     auto [ext, desc] = *it;
     assert(desc->type() == kSmall);
@@ -170,7 +186,7 @@ class RunBin {
     ((SmallMeta*) run)->construct(arena, size, count);
     desc->palloc_srun(rid); // failure atomic
     // check whether there are any free small runs
-    if(desc->locate_fsrun(rid) == desc->count()) exts_.erase(it);
+    if(desc->locate_fsrun(rid) == desc->count()) bins_[bid].erase(it);
 
     return {(SmallMeta*) run, run};
   }
@@ -179,15 +195,17 @@ class RunBin {
    * @brief allocate a run for medium allocation
    * @param arena the index of arena in the global arena array
    * @param size region size in current run
+   * @param recover do allocation from recovering bin
    * @return (meta of run, the start address of run)
    * */
-  mrun_t mrun_acquire(size_t arena, size_t size) {
+  mrun_t mrun_acquire(size_t arena, size_t size, bool recover) {
     // todo: physical page pre-allocation for runs of different size
     assert(type_ == kMedium);
     assert(size > kMaxSmallSize && size <= kMaxMediumSize);
+    size_t bid = recover ? 1 : 0;
     LockGuard guard(lock_);
-    auto it = select_ext();
-    if(it == exts_.end()) return {nullptr, nullptr}; // no more space
+    auto it = select_ext(recover);
+    if(it == bins_[bid].end()) return {nullptr, nullptr}; // no more space
 
     auto [ext, desc] = *it;
     assert(desc->type() == kMedium);
@@ -200,7 +218,7 @@ class RunBin {
     meta->construct(arena, size, count);
     desc->palloc_mrun(rid);  // failure atomic
     // check whether there are any free medium runs
-    if(desc->locate_fmrun(rid) == desc->count()) exts_.erase(it);
+    if(desc->locate_fmrun(rid) == desc->count()) bins_[bid].erase(it);
 
     return {meta, run};
   }
@@ -209,23 +227,26 @@ class RunBin {
    * @brief release a run (small allocation) back to current RunBin
    * @param run the start address of the run
    * @param release whether to persistently release the run or just inform the corresponding RunBin that there is
+   * @param recover release runs back to recovering bin
    * a half-used run belongs to current RunCase-RunBin
    * */
-  void srun_release(void* run, bool release) {
+  void srun_release(void* run, bool release, bool recover) {
     assert(type_ == kSmall);
+    assert(!(!release && recover)); // half-used run can only inform normal bin
+    size_t bid = recover ? 1 : 0;
     LockGuard guard(lock_);
     ExtentDesc* desc = ext_case_->descriptor(run);
     assert(desc->size() == rsize_ && (uintptr_t) run % rsize_ == 0);
     assert(desc->type() == type_ && desc->rcase() == rcase_);
     void* ext = (void*) rounddown((uintptr_t) run, kExtentSize);
-    auto it = exts_.find(ext);
-    if(it == exts_.end()) exts_.insert({ext, desc});
+    auto it = bins_[bid].find(ext);
+    if(it == bins_[bid].end()) bins_[bid].insert({ext, desc});
     size_t rid = ((uintptr_t) run - (uintptr_t) ext) / rsize_;
 
     if(release) desc->pdealloc_srun(rid);
-    if(!desc->srun_busy() && exts_.size() > kExtentHoldCount) {
+    if(!desc->srun_busy() && bins_[bid].size() > kExtentHoldCount) {
       assert(it->first == ext && release == true);
-      exts_.erase(it), ext_case_->release(desc, ext);
+      bins_[bid].erase(it), ext_case_->release(desc, ext);
     }
   }
 
@@ -234,22 +255,25 @@ class RunBin {
    * @param run the start address of the run
    * @param release whether to persistently release the run or just inform the corresponding RunBin that there is
    * a half-used run belongs to current RunCase-RunBin
+   * @param recover release runs back to recovering bin
    * */
-  void mrun_release(void* run, bool release) {
+  void mrun_release(void* run, bool release, bool recover) {
     assert(type_ == kMedium);
+    assert(!(!release && recover)); // half-used run can only inform normal bin
+    size_t bid = recover ? 1 : 0;
     LockGuard guard(lock_);
     ExtentDesc* desc = ext_case_->descriptor(run);
     assert(desc->size() == rsize_ && (uintptr_t) run % rsize_ == 0);
     assert(desc->type() == type_ && desc->rcase() == rcase_);
     void* ext = (void*) rounddown((uintptr_t) run, kExtentSize);
-    auto it = exts_.find(ext);
-    if(it == exts_.end()) exts_.insert({ext, desc});
+    auto it = bins_[bid].find(ext);
+    if(it == bins_[bid].end()) bins_[bid].insert({ext, desc});
     size_t rid = ((uintptr_t) run - (uintptr_t) ext) / rsize_;
 
     if(release) desc->pdealloc_mrun(rid);
-    if(!desc->mrun_busy() && exts_.size() > kExtentHoldCount) {
+    if(!desc->mrun_busy() && bins_[bid].size() > kExtentHoldCount) {
       assert(it->first == ext && release == true);
-      exts_.erase(it), ext_case_->release(desc, ext);
+      bins_[bid].erase(it), ext_case_->release(desc, ext);
     }
   }
 };
@@ -263,8 +287,10 @@ class LargeBin {
   uint32_t rcase_;        // index of the corresponding RunCase in the global RunCase array
   uint32_t size_;         // max supported large region size
   ExtentCase* ext_case_;  // extent (de-)allocation
+
+  static constexpr size_t kBinCount = 2;  // bin 0 for normal allocation, bin 1 for allocation during recovering
   // [the start address of a run, RunBits]
-  std::unordered_map<void*, RunBits> runs_; // non-full (non-empty, half-used) runs (extents) for large allocation
+  std::unordered_map<void*, RunBits> bins_[kBinCount]; // non-full (non-empty, half-used) runs (extents) for large allocation
   typedef std::unordered_map<void*, RunBits>::iterator iterator;
 
   static constexpr size_t kBucketCount = 32;
@@ -274,10 +300,11 @@ class LargeBin {
   static constexpr size_t kExtentHoldCount = SlabConst::kExtentHoldCount;
 
  public:
-  LargeBin() : lock_(), rcase_(-1), size_(-1), ext_case_(nullptr) {}
+  LargeBin() : lock_(), rcase_(-1), size_(-1), ext_case_(nullptr), bins_{} {}
 
   ~LargeBin() {
-    for(auto& [ext, bits] : runs_) {
+    assert(bins_[1].empty()); // bin 1 should always be empy, except during recovering
+    for(auto& [ext, bits] : bins_[0]) {
       assert((uintptr_t) ext % kExtentSize == 0);
       ExtentDesc* desc = ext_case_->descriptor(ext);
       assert(desc->size() == size_ && desc->type() == kLarge);
@@ -292,6 +319,14 @@ class LargeBin {
   LargeBin& operator=(const LargeBin&) = delete;
 
   /**
+   * @brief some post-recovery finishing tasks
+   * */
+  void finish_recover() {
+    bins_[0].merge(bins_[1]);
+    assert(bins_[1].empty());
+  }
+
+  /**
    * @brief LargeBin initialization
    * @param rcase the index of corresponding RunCase in the global RunCase array
    * @param size max supported large region size
@@ -301,7 +336,7 @@ class LargeBin {
     assert(popcount(size) == 1 && size > kMaxMediumSize);
     assert(size <= kMaxLargeSize && ext_case != nullptr);
     rcase_ = rcase, size_ = size, ext_case_ = ext_case;
-    runs_.reserve(kBucketCount);
+    for(auto& bin : bins_) bin.reserve(kBucketCount);
   }
 
   /**
@@ -312,27 +347,29 @@ class LargeBin {
     assert(desc->size() == size_ && desc->type() == kLarge);
     void* ext = ext_case_->extent(desc);
     LockGuard guard(lock_);
-    auto [it, ins] = runs_.insert({ext, RunBits(desc->size(), desc->count(), desc, ext)});
+    auto [it, ins] = bins_[0].insert({ext, RunBits(desc->size(), desc->count(), desc, ext)});
     assert(ins == true);
     it->second.reload(desc);
   }
 
   /**
    * @brief allocate a large region
+   * @param recover do allocation from recovering bin
    * */
-  region_t acquire() {
+  region_t acquire(bool recover) {
+    size_t bid = recover ? 1 : 0;
     LockGuard guard(lock_);
-    if(runs_.empty()) {
-      auto [desc, ext] = ext_case_->acquire(kLarge, rcase_, size_);
+    if(bins_[bid].empty()) {
+      auto [desc, ext] = ext_case_->acquire(kLarge, rcase_, size_, recover);
       if(ext == nullptr) return {nullptr, nullptr};
       assert(size_ == desc->size() && desc->rcase() == rcase_);
-      runs_.insert({ext, RunBits(desc->size(), desc->count(), desc, ext)});
+      bins_[bid].insert({ext, RunBits(desc->size(), desc->count(), desc, ext)});
     }
-    assert(!runs_.empty());
-    auto it = runs_.begin();
+    assert(!bins_[bid].empty());
+    auto it = bins_[bid].begin();
     RunBits& rbits = it->second;
     region_t region = rbits.alloc_large();
-    if(rbits.empty()) { runs_.erase(it); } // no more regions available in the current run
+    if(rbits.empty()) { bins_[bid].erase(it); } // no more regions available in the current run
     return region;
   }
 
@@ -340,8 +377,9 @@ class LargeBin {
    * @brief release a large region
    * @param desc the corresponding extent descriptor
    * @param ptr the start address of the region
+   * @param recover release regions back to recovering bin
    * */
-  void release(ExtentDesc* desc, void* ptr) {
+  void release(ExtentDesc* desc, void* ptr, bool recover) {
     assert(desc->size() == size_ && desc->rcase() == rcase_);
     // todo: physical page release
     void* ext = (void*) rounddown((uintptr_t) ptr, kExtentSize);
@@ -350,16 +388,17 @@ class LargeBin {
     desc->token(ind)->fire();  // persistently mark this region as free
     bool free_ext = false;
     {
+      size_t bid = recover ? 1 : 0;
       LockGuard guard(lock_);
-      auto it = runs_.find(ext);
-      if(it == runs_.end()) { // this extent has been fully allocated, reconstruct it
-        it = runs_.insert({ext, RunBits(desc->size(), desc->count(), desc, ext, true)}).first;
+      auto it = bins_[bid].find(ext);
+      if(it == bins_[bid].end()) { // this extent has been fully allocated, reconstruct it
+        it = bins_[bid].insert({ext, RunBits(desc->size(), desc->count(), desc, ext, true)}).first;
       }
       RunBits& rbits = it->second;
       rbits.dealloc_large(ind);
       // release free extent back to ExtentCase
-      if(rbits.full() && runs_.size() > kExtentHoldCount) {
-        runs_.erase(it), free_ext = true;
+      if(rbits.full() && bins_[bid].size() > kExtentHoldCount) {
+        bins_[bid].erase(it), free_ext = true;
       }
     }
     if(free_ext) { ext_case_->release(desc, ext); }
@@ -415,6 +454,18 @@ class RunCase {
   RunCase& operator=(const RunCase&) = delete;
 
   /**
+   * @brief some post-recovery finishing tasks
+   * */
+  void finish_recover() {
+    for(size_t ind = 0; ind < kRunTypeCount; ind++) {
+      rbins_[ind].finish_recover();
+    }
+    for(size_t ind = 0; ind < kLargeTypeCount; ind++) {
+      lbins_[ind].finish_recover();
+    }
+  }
+
+  /**
    * @brief reload a small extent into current RunCase
    * @param desc descriptor to the extent (kSmall)
    * */
@@ -448,24 +499,17 @@ class RunCase {
   }
 
   /**
-   * @brief recover/restore a large extent
-   * @param desc descriptor to the extent (kLarge)
-   * */
-  void large_recover(ExtentDesc* desc) {
-
-  }
-
-  /**
    * @brief allocate a run for small allocation
    * @param arena the index of arena in the global arena array
    * @param index the slab size class index
+   * @param recover do allocation during recovering
    * */
-  srun_t srun_acquire(size_t arena, size_t index) {
+  srun_t srun_acquire(size_t arena, size_t index, bool recover) {
     assert(index <= kMaxSmallIndex);
     size_t rbid = SlabConst::kCBin2RBin[index / kNSlabsPerGrp];
     size_t size = sc_->index2size(index);
     assert(rbid < kRunTypeCount && size <= kMaxSmallSize);
-    return rbins_[rbid].srun_acquire(arena, size);
+    return rbins_[rbid].srun_acquire(arena, size, recover);
   }
 
   /**
@@ -474,27 +518,29 @@ class RunCase {
    * @param index the slab size class index
    * @param release whether to persistently release the run or just inform the corresponding RunBin that there is
    * a half-used run belongs to current RunCase-RunBin
+   * @param recover release run back to recovering bin
    * */
-  void srun_release(void* run, size_t index, bool release = true) {
+  void srun_release(void* run, size_t index, bool release, bool recover) {
     assert(index <= kMaxSmallIndex);
     assert(ext_case_->descriptor(run)->rcase() == index_);
     size_t rbid = SlabConst::kCBin2RBin[index / kNSlabsPerGrp];
     assert(rbid < kRunTypeCount);
-    rbins_[rbid].srun_release(run, release);
+    rbins_[rbid].srun_release(run, release, recover);
   }
 
   /**
    * @brief allocate a run for medium allocation
    * @param arena the index of arena in the global arena array
    * @param index the slab size class index
+   * @param recover do allocation during recovering
    * */
-  mrun_t mrun_acquire(size_t arena, size_t index) {
+  mrun_t mrun_acquire(size_t arena, size_t index, bool recover) {
     assert(index > kMaxSmallIndex && index < kNSlabsCached);
     size_t rbid = SlabConst::kCBin2RBin[index / kNSlabsPerGrp];
     assert(rbid < kRunTypeCount);
     size_t size = sc_->index2size(index);
     assert(size > kMaxSmallSize && size <= kMaxMediumSize);
-    return rbins_[rbid].mrun_acquire(arena, size);
+    return rbins_[rbid].mrun_acquire(arena, size, recover);
   }
 
   /**
@@ -503,35 +549,40 @@ class RunCase {
    * @param index the slab size class index
    * @param release whether to persistently release the run or just inform the corresponding RunBin that there is a
    * half-used run belongs to current RunCase-RunBin
+   * @param recover release run back to recovering bin
    * */
-  void mrun_release(void* run, size_t index, bool release = true) {
+  void mrun_release(void* run, size_t index, bool release, bool recover) {
     assert(index > kMaxSmallIndex && index < kNSlabsCached);
     assert(ext_case_->descriptor(run)->rcase() == index_);
     size_t rbid = SlabConst::kCBin2RBin[index / kNSlabsPerGrp];
     assert(rbid < kRunTypeCount);
-    rbins_[rbid].mrun_release(run, release);
+    rbins_[rbid].mrun_release(run, release, recover);
   }
 
   /**
    * @brief allocate a large region
    * @param size the size of region
+   * @param recover do allocation during recovering
    * */
-  region_t large_acquire(size_t size) { // todo: physical page pre-allocation
+  region_t large_acquire(size_t size, bool recover) { // todo: physical page pre-allocation
     assert(size > kMaxMediumSize && size <= kMaxLargeSize);
     size_t bid = index_most1((size - 1) / kMaxMediumSize);
     assert(bid < kLargeTypeCount);
-    return lbins_[bid].acquire();
+    return lbins_[bid].acquire(recover);
   }
 
   /**
    * @brief return a large region back to memory pool
+   * @param desc the corresponding extent descriptor
+   * @param ptr the start address of the region
+   * @param recover the region is allocated during recovering
    * */
-  void large_release(ExtentDesc* desc, void* ptr) {
+  void large_release(ExtentDesc* desc, void* ptr, bool recover) {
     assert(desc->type() == kLarge && desc->rcase() == index_);
     assert(desc->size() > kMaxMediumSize && desc->size() <= kMaxLargeSize);
     size_t bid = index_most1((desc->size() - 1) / kMaxMediumSize);
     assert(bid < kLargeTypeCount);
-    lbins_[bid].release(desc, ptr);
+    lbins_[bid].release(desc, ptr, recover);
   }
 };
 

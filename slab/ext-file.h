@@ -89,10 +89,8 @@ class ExtentFile {
     size_t attempt = 0;
     while(true) {
       hint = fs_mmap_hint(fd_, size_ + kExtentSize);
-      hint = (void*) roundup((size_t)
-                               hint + kRootSegSize, kExtentSize);
-      hint = (void*) ((size_t)
-                        hint - kRootSegSize);
+      hint = (void*) roundup((size_t) hint + kRootSegSize, kExtentSize);
+      hint = (void*) ((size_t) hint - kRootSegSize);
       addr = fs_file_mmap(fd_, size_, hint);
       if(addr == hint) break;
       if(++attempt >= kMaxAttempts) {

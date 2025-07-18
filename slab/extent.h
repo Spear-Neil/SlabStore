@@ -14,6 +14,7 @@
 #include <tuple>
 #include <vector>
 #include <atomic>
+#include <tbb/concurrent_unordered_set.h>
 
 #include "const.h"
 #include "desc.h"
@@ -38,6 +39,8 @@ class ExtentCase {
   size_t size_;        // pool size (extent segment size)
   MetaFile meta_;      // meta file
   ExtentFile extent_;  // extent file
+
+  tbb::concurrent_unordered_set<ExtentDesc*> recs_; // extents allocated during recovering
 
   static constexpr size_t kDefaultSize = -1;  // use capacity size of nvm device as pool size
   static constexpr size_t kExtentSize = SlabConst::kExtentSize;
@@ -85,7 +88,7 @@ class ExtentCase {
     std::atomic<size_t> index_; // currently processing extent index
 
    public:
-    RecoverContainer(ExtentCase* ext_case) : ext_case_(ext_case), index_(0) {}
+    explicit RecoverContainer(ExtentCase* ext_case) : ext_case_(ext_case), index_(0) {}
 
     ~RecoverContainer() = default;
 
@@ -97,10 +100,17 @@ class ExtentCase {
      * @brief get next extent descriptor for recover
      * */
     ExtentDesc* next() {
-      size_t ind = index_.fetch_add(1);
       size_t count = ext_case_->meta_.head().count();
-      if(ind >= count) return nullptr;
-      return ext_case_->meta_.head().descriptor(ind);
+      while(true) {
+        size_t ind = index_.fetch_add(1);
+        if(ind >= count) return nullptr; // all extents have been handled
+        ExtentDesc* desc = ext_case_->meta_.head().descriptor(ind);
+        assert(desc->type() < kTypeCount);
+        // skip reclaimed/free extents
+        if(desc->type() == kInvalid) continue;
+        // skip extents allocated during recovering
+        if(!ext_case_->recover_extent(desc)) return desc;
+      }
     }
   };
 
@@ -112,6 +122,11 @@ class ExtentCase {
   ExtentCase(const ExtentCase&) = delete;
 
   ExtentCase& operator=(const ExtentCase&) = delete;
+
+  /**
+   * @brief some post-recovery finishing tasks
+   * */
+  void finish_recover() { recs_.clear(); }
 
   /**
    * @brief open or create a persistent memory pool
@@ -180,19 +195,28 @@ class ExtentCase {
   }
 
   /**
+   * @brief check whether the extent is allocated during recovering
+   * */
+  bool recover_extent(ExtentDesc* desc) {
+    return recs_.find(desc) != recs_.end();
+  }
+
+  /**
    * @brief acquire an extent from ExtentCase
    * @param type region type, means how to use an extent
    * @param run_case the index of RunCase
    * @param size run size (small & medium) or region size (large)
+   * @param recover do extent allocation during recovering
    * @return descriptor (initialized) and start address of the extent
    * */
-  extent_t acquire(RegionType type, size_t run_case, size_t size) {
+  extent_t acquire(RegionType type, size_t run_case, size_t size, bool recover) {
     // todo: physical page pre-allocation for extents containing small regions
     LockGuard guard(lock_);
     MetaHead& head = meta_.head();
     auto [desc, index] = head.acquire(type, run_case, size);
     void* ext = nullptr; // if no more space
     if(desc) ext = extent_.locate(index);
+    if(recover) recs_.insert(desc); // record extents allocated during recovering
     return {desc, ext};
   }
 
