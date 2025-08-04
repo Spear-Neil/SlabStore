@@ -12,6 +12,7 @@
 #include <cassert>
 #include <atomic>
 #include <cstring>
+#include <unordered_set>
 
 #include "util.h"
 
@@ -26,7 +27,7 @@ using util::hash;
 using util::popcount;
 using util::index_least0;
 using util::index_least1;
-using util::cmpeq_int8_simd256;
+using util::cmpeq_int8_simd128;
 using util::String;
 using util::Epoch;
 using util::VerLock;
@@ -35,11 +36,11 @@ using util::AtomicDense;
 
 struct HashConfig {
   static constexpr bool kInMemStore = true;        // all kv pairs reside in memory
-  static constexpr size_t kNSlotInBucket = 64;     // the number of slots in a hash bucket
-  static constexpr size_t kNBucketInSegment = 32;  // the number of buckets in a hash segment
+  static constexpr size_t kNSlotInBucket = 48;     // the number of slots in a hash bucket
+  static constexpr size_t kNBucketInSegment = 64;  // the number of buckets in a hash segment
   static constexpr size_t kInitDepth = 4;          // init global depth, 2^4 = 16, 2 cache lines
 
-  static_assert(kNSlotInBucket == 64 || kNSlotInBucket == 32);
+  static_assert(kNSlotInBucket == 16 || kNSlotInBucket == 32 || kNSlotInBucket == 48);
   static_assert(popcount(kNBucketInSegment) == 1 && kNBucketInSegment <= 256);
 };
 
@@ -72,27 +73,26 @@ class alignas(64) HashBucket {
   static constexpr std::memory_order store_order = std::memory_order_relaxed;
 
   VerLock lock_;             // operation on this bucket needs to hold this lock
-  uint64_t bitmap_;          // whether the corresponding kvs is used
-  size_t depth_;             // segment/bucket local depth
-  size_t index_;             // bucket index in the corresponding segment
+  uint64_t bitmap_: 48;      // whether the corresponding kvs is used
+  uint8_t depth_;            // segment/bucket local depth
+  uint8_t index_;            // bucket index in the corresponding segment
   uint8_t tags_[kNSlot];     // 8-bit bucket tag of the corresponding kvs.key
   AtomicDense kvs_[kNSlot];  // pointer kv with its 16-bit slot tag
 
  private:
   uint64_t compare_equal(void* p, char c) const {
-    if constexpr(kNSlot == 32) {
-      return cmpeq_int8_simd256(p, c);
-    } else if constexpr(kNSlot == 64) {
-      uint64_t m1 = cmpeq_int8_simd256(p, c);
-      uint64_t m2 = cmpeq_int8_simd256((char*) p + 32, c);
-      return (m2 << 32) | m1;
+    if constexpr(kNSlot == 16) {
+      return cmpeq_int8_simd128(p, c);
+    } else if constexpr(kNSlot == 32) {
+      uint64_t m0 = cmpeq_int8_simd128(p, c);
+      uint64_t m1 = cmpeq_int8_simd128((char*) p + 16, c);
+      return (m1 << 16) | m0;
+    } else if constexpr(kNSlot == 48) {
+      uint64_t m0 = cmpeq_int8_simd128(p, c);
+      uint64_t m1 = cmpeq_int8_simd128((char*) p + 16, c);
+      uint64_t m2 = cmpeq_int8_simd128((char*) p + 32, c);
+      return (m2 << 32) | (m1 << 16) | m0;
     }
-    assert(false);
-  }
-
-  uint64_t full_idx() const {
-    if constexpr(kNSlot == 32) return 32;
-    else if constexpr(kNSlot == 64) return -1;
     assert(false);
   }
 
@@ -142,9 +142,14 @@ class alignas(64) HashBucket {
 
   VerLock& lock() { return lock_; }
 
-  size_t& depth() { return depth_; }
+  uint8_t& depth() { return depth_; }
 
-  size_t& index() { return index_; }
+  uint8_t& index() { return index_; }
+
+  /**
+   * @brief number of kv pairs in current bucket, thread unsafe
+   * */
+  size_t size() const { return popcount(bitmap_); }
 
   /**
    * @brief insert a key-value pair into current bucket or
@@ -172,7 +177,7 @@ class alignas(64) HashBucket {
     // a new key-value pair, find an empty slot
     size_t idx = index_least0(bitmap_);
     // the current bucket is full, need segment split
-    if(idx == full_idx()) return (KVPair*) kNoSpace;
+    if(idx == kNSlot) return (KVPair*) kNoSpace;
 
     // not found an existing kv, insert new kv
     kvs_[idx].store(DensePointer(kv, slot_tag(code)), store_order);
@@ -264,6 +269,16 @@ class alignas(64) HashSegment {
    * @brief split current segment into two segment
    * */
   HashSegment* split() { return new HashSegment(std::move(*this)); }
+
+  /**
+   * @brief number of kv pairs in current segment, thread unsafe
+   * */
+  size_t size() const {
+    size_t count = 0;
+    for(const Bucket& bucket : buckets_)
+      count += bucket.size();
+    return count;
+  }
 };
 
 template<typename K, typename V>
@@ -271,6 +286,8 @@ class alignas(32) HashTable {
   typedef HashBucket<K, V> Bucket;
   typedef HashSegment<K, V> Segment;
   static constexpr size_t kInitDepth = HashConfig::kInitDepth;
+  static constexpr size_t kNSlotInBucket = HashConfig::kNSlotInBucket;
+  static constexpr size_t kNBucketInSegment = HashConfig::kNBucketInSegment;
 
   VerLock lock_;     // segment split and directory doubling need to hold this lock
   Segment** dir_;    // directory (segment entry array)
@@ -425,6 +442,47 @@ class alignas(32) HashTable {
       if(bucket->lock().unlock_shared(version)) return kv;
     }
     assert(false);
+  }
+
+  /**
+   * @brief directory size (segment entry count), thread-unsafe
+   * */
+  size_t directory_size() const { return 0x01ul << depth_; }
+
+  /**
+   * @brief total segment count, thread-unsafe
+   * */
+  size_t segment_count() const {
+    std::unordered_set<Segment*> segments;
+    segments.reserve(directory_size());
+    for(size_t i = 0; i < directory_size(); i++)
+      segments.insert(dir_[i]);
+    return segments.size();
+  }
+
+  /**
+   * @brief bucket count, thread-unsafe
+   * */
+  size_t bucket_count() const { return segment_count() * kNBucketInSegment; }
+
+  /**
+   * @brief the number of kv pairs if load factor = 1, thread-unsafe
+   * */
+  size_t capacity() const { return bucket_count() * kNSlotInBucket; }
+
+  /**
+   * @brief the number of kv pairs, thread-unsafe
+   * */
+  size_t size() const {
+    size_t count = 0;
+    std::unordered_set<Segment*> segments;
+    segments.reserve(directory_size());
+    for(size_t i = 0; i < directory_size(); i++) {
+      if(segments.find(dir_[i]) == segments.end()) {
+        segments.insert(dir_[i]), count += dir_[i]->size();
+      }
+    }
+    return count;
   }
 };
 

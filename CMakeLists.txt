@@ -4,9 +4,9 @@ set(CMAKE_CXX_STANDARD 17)
 
 include_directories(util)
 
-execute_process(COMMAND lscpu COMMAND grep avx2 OUTPUT_VARIABLE AVX2_ENABLE)
-if (NOT AVX2_ENABLE)
-    message(SEND_ERROR "avx2 is not supported")
+execute_process(COMMAND lscpu COMMAND grep sse2 OUTPUT_VARIABLE SSE2_ENABLE)
+if (NOT SSE2_ENABLE)
+    message(SEND_ERROR "sse2 is not supported")
 endif ()
 
 link_libraries(pthread numa jemalloc tbb)
