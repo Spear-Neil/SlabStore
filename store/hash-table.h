@@ -311,7 +311,21 @@ class alignas(32) HashTable {
     }
   }
 
-  ~HashTable() { delete epoch_; }
+  ~HashTable() {
+    size_t global = depth_, local;
+    size_t count = 0x01ul << global;
+    for(size_t idx = 0; idx < count; idx++) {
+      if(dir_[idx] == nullptr) continue;
+      local = dir_[idx]->depth();
+      size_t npart = count >> local;
+      for(size_t pid = 1; pid < npart; pid++) {
+        dir_[(pid << local) + idx] = nullptr;
+      }
+      delete dir_[idx];
+    }
+    delete[] dir_;
+    delete epoch_;
+  }
 
   HashTable(const HashTable&) = delete;
 

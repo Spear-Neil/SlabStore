@@ -23,8 +23,11 @@ int main() {
     tbb::parallel_for(tbb::blocked_range<size_t>(0, kv_count),
                       [&](const tbb::blocked_range<size_t>& range) {
                         for(size_t i = range.begin(); i < range.end(); i++) {
-                          if(table_type == 0) table.upsert(new pair{.key = i, .value = i});
-                          else if(table_type == 1) map.insert({i, i});
+                          if(table_type == 0) {
+                            auto kv = (pair*) malloc(sizeof(pair));
+                            kv->key = i, kv->value = i;
+                            table.upsert(kv);
+                          } else if(table_type == 1) map.insert({i, i});
                           else { exit(EXIT_FAILURE); }
                         }
                       });
