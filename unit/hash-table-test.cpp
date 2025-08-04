@@ -1,16 +1,18 @@
 #include <iostream>
-#include <tbb/concurrent_unordered_set.h>
 #include <tbb/parallel_for.h>
 
+#include "../store/hash-table.h"
 #include "util.h"
 
+using namespace SlabStore;
 using namespace util;
 
-int main(int argc, char* argv[]) {
-  size_t nthd = 96, round = 20;
+int main() {
+  size_t nthd = 48, round = 10;
   size_t kv_count = 1'000'000'000;
 
-  tbb::concurrent_unordered_set<size_t> set;
+  HashTable<uint64_t, uint64_t> table;
+  typedef HashTable<uint64_t, uint64_t>::KVPair pair;
   tbb::task_arena arena(nthd);
   Timer timer;
   timer.start();
@@ -18,7 +20,7 @@ int main(int argc, char* argv[]) {
     tbb::parallel_for(tbb::blocked_range<size_t>(0, kv_count),
                       [&](const tbb::blocked_range<size_t>& range) {
                         for(size_t i = range.begin(); i < range.end(); i++) {
-                          set.insert(i);
+                          table.upsert(new pair{.key = i, .value = i});
                         }
                       });
   });
@@ -31,7 +33,8 @@ int main(int argc, char* argv[]) {
       tbb::parallel_for(tbb::blocked_range<size_t>(0, kv_count),
                         [&](const tbb::blocked_range<size_t>& range) {
                           for(size_t i = range.begin(); i < range.end(); i++) {
-                            if(set.find(i) == set.end())
+                            auto kv = table.lookup(i);
+                            if(kv == nullptr || kv->key != i)
                               exit(EXIT_FAILURE);
                           }
                         });

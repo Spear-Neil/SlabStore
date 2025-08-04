@@ -105,12 +105,10 @@ class alignas(kPageSize) MetaHead {
     // do not change the next field of the descriptor
     desc->construct(type, run_case, size, next, runs, false);
     meta_[nid].ext_free = next;
-    persist_write_back(&meta_[nid], sizeof(DescMeta));
-    persist_wait_finish();
+    wait_write_back(&meta_[nid], sizeof(DescMeta));
 
     mind_ = nid; // failure atomic
-    persist_write_back(&mind_, sizeof(mind_));
-    persist_wait_finish();
+    wait_write_back(&mind_, sizeof(mind_));
     return {desc, index};
   }
 
@@ -132,8 +130,7 @@ class alignas(kPageSize) MetaHead {
     desc->construct(type, run_case, size, next, nullptr, true);
 
     meta.ext_free = next; // failure atomic
-    persist_write_back(&meta, sizeof(DescMeta));
-    persist_wait_finish();
+    wait_write_back(&meta, sizeof(DescMeta));
     return {desc, index};
   }
 
@@ -172,12 +169,10 @@ class alignas(kPageSize) MetaHead {
     auto desc = (ExtentDesc*) ext_desc_.load() + index;
     desc->construct(type, run_case, size, nullptr, runs, false);
     meta_[nid].ext_used += 1;
-    persist_write_back(&meta_[nid], sizeof(DescMeta));
-    persist_wait_finish();
+    wait_write_back(&meta_[nid], sizeof(DescMeta));
 
     mind_ = nid; // failure atomic
-    persist_write_back(&mind_, sizeof(mind_));
-    persist_wait_finish();
+    wait_write_back(&mind_, sizeof(mind_));
     return {desc, index};
   }
 
@@ -195,8 +190,7 @@ class alignas(kPageSize) MetaHead {
     auto desc = (ExtentDesc*) ext_desc_.load() + index;
     desc->construct(type, run_case, size, nullptr, nullptr, true);
     meta.ext_used += 1; // failure atomic
-    persist_write_back(&meta, sizeof(DescMeta));
-    persist_wait_finish();
+    wait_write_back(&meta, sizeof(DescMeta));
     return {desc, index};
   }
 
@@ -235,12 +229,10 @@ class alignas(kPageSize) MetaHead {
     persist_wait_finish();
 
     mind_ = nid; // failure atomic
-    persist_write_back(&mind_, sizeof(mind_));
-    persist_wait_finish();
+    wait_write_back(&mind_, sizeof(mind_));
     // second: update the descriptor to invalid (for fast recovery)
     desc->type() = kInvalid;
-    persist_write_back(desc, sizeof(ExtentDesc));
-    persist_wait_finish();
+    wait_write_back(desc, sizeof(ExtentDesc));
   }
 
   /**
@@ -253,16 +245,13 @@ class alignas(kPageSize) MetaHead {
 
     // first: link the free extent to the reclaimed list
     desc->next() = meta.ext_free;
-    persist_write_back(desc, sizeof(ExtentDesc));
-    persist_wait_finish();
+    wait_write_back(desc, sizeof(ExtentDesc));
     meta.ext_free = desc;  // failure atomic
-    persist_write_back(&meta, sizeof(DescMeta));
-    persist_wait_finish();
+    wait_write_back(&meta, sizeof(DescMeta));
 
     // second: update the descriptor to invalid (for fast recovery)
     desc->type() = kInvalid;
-    persist_write_back(desc, sizeof(ExtentDesc));
-    persist_wait_finish();
+    wait_write_back(desc, sizeof(ExtentDesc));
   }
 
  public:
@@ -282,20 +271,17 @@ class alignas(kPageSize) MetaHead {
    * */
   void init(size_t size, void* ext, void* med) {
     stat_ = kChaotic;
-    persist_write_back(&stat_, sizeof(StatCode));
-    persist_wait_finish();
+    wait_write_back(&stat_, sizeof(StatCode));
 
     size_ = size, mind_ = 0, occupied_ = nullptr;
     ext_desc_ = ext, ext_total_ = size / kExtentSize;
     med_meta_ = med, med_total_ = size / kMedRunBase;
     meta_[0].ext_used = 0, meta_[0].ext_free = nullptr;
     meta_[0].med_used = 0, meta_[0].med_free = nullptr;
-    persist_write_back(this, sizeof(MetaHead));
-    persist_wait_finish();
+    wait_write_back(this, sizeof(MetaHead));
 
     stat_ = kVolatile;
-    persist_write_back(&stat_, sizeof(StatCode));
-    persist_wait_finish();
+    wait_write_back(&stat_, sizeof(StatCode));
   }
 
   /**
@@ -322,8 +308,7 @@ class alignas(kPageSize) MetaHead {
       stat_ = kVolatile, occupied_ = nullptr;
       assert((uintptr_t) &stat_ - (uintptr_t) this <= kCacheLineSize);
       assert((uintptr_t) &occupied_ - (uintptr_t) this <= kCacheLineSize);
-      persist_write_back(this, kCacheLineSize);
-      persist_wait_finish();
+      wait_write_back(this, kCacheLineSize);
 
       return true;
     }
@@ -372,11 +357,9 @@ class alignas(kPageSize) MetaHead {
    * */
   void shutdown() {
     // persist allocator global meta information before atomically update StatCode
-    persist_write_back(this, sizeof(MetaHead));
-    persist_wait_finish();
+    wait_write_back(this, sizeof(MetaHead));
     stat_ = kConsistent; // failure atomic
-    persist_write_back(&stat_, sizeof(StatCode));
-    persist_wait_finish();
+    wait_write_back(&stat_, sizeof(StatCode));
 
     if(kLogInfo) {
       printf("[INFO]: total extents count: %zu, used extents (i.e. free extents, full/half-used extents)"

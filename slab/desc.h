@@ -54,7 +54,7 @@ namespace SlabStore {
 using util::index_least0;
 using util::popcount;
 
-enum RegionType : uint32_t { kSmall, kMedium, kLarge, kInvalid, kTypeCount};
+enum RegionType : uint32_t { kSmall, kMedium, kLarge, kInvalid, kTypeCount };
 
 /**
  * @brief Run's usage condition after normal allocator close
@@ -240,8 +240,7 @@ class alignas(kCacheLineSize) ExtentDesc {
     assert((small_[uid] & (0x01ul << idx)) == 0);
     small_[uid] = small_[uid] | (0x01ul << idx);
     assert(uintptr_t(this) % kCacheLineSize == 0);
-    persist_write_back(this, sizeof(ExtentDesc));
-    persist_wait_finish();
+    wait_write_back(this, sizeof(ExtentDesc));
   }
 
   /**
@@ -253,8 +252,7 @@ class alignas(kCacheLineSize) ExtentDesc {
     size_t uid = rid / 64, idx = rid % 64;
     assert((small_[uid] & (0x01ul << idx)) != 0);
     small_[uid] = small_[uid] & ~(0x01ul << idx);
-    persist_write_back(this, sizeof(ExtentDesc));
-    persist_wait_finish();
+    wait_write_back(this, sizeof(ExtentDesc));
   }
 
   /**
@@ -280,8 +278,7 @@ class alignas(kCacheLineSize) ExtentDesc {
     assert(medium_[rid] == 0);
     medium_[rid] = 1;
     assert(uintptr_t(this) % kCacheLineSize == 0);
-    persist_write_back(this, sizeof(ExtentDesc));
-    persist_wait_finish();
+    wait_write_back(this, sizeof(ExtentDesc));
   }
 
   /**
@@ -292,8 +289,7 @@ class alignas(kCacheLineSize) ExtentDesc {
     assert(type_ == kMedium && rid < count_);
     assert(medium_[rid] == 1);
     medium_[rid] = 0;
-    persist_write_back(this, sizeof(ExtentDesc));
-    persist_wait_finish();
+    wait_write_back(this, sizeof(ExtentDesc));
   }
 };
 
@@ -323,8 +319,7 @@ class SmallMeta {
   void construct(size_t arena, size_t size, size_t count) {
     size_ = size, arena_ = arena, count_ = count, next_ = nullptr, cond_ = kPure;
     for(size_t idx = 0; idx < count; idx++) tokens_[idx].fire(false);
-    persist_write_back(this, sizeof(SmallMeta) + count * sizeof(token_t));
-    persist_wait_finish();
+    wait_write_back(this, sizeof(SmallMeta) + count * sizeof(token_t));
   }
 
   /**
@@ -389,8 +384,7 @@ class alignas(kCacheLineSize) MediumMeta {
     assert(count <= 51);
     size_ = size, arena_ = arena, count_ = count, next_ = nullptr, cond_ = kPure;
     for(int ind = 0; ind < count; ind++) tokens_[ind].fire(false);
-    persist_write_back(this, sizeof(MediumMeta));
-    persist_wait_finish();
+    wait_write_back(this, sizeof(MediumMeta));
   }
 
   /**

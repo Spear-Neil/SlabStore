@@ -47,29 +47,28 @@ class token_t {
   static constexpr std::memory_order load_order = std::memory_order_relaxed;
   static constexpr std::memory_order store_order = std::memory_order_relaxed;
 
- public:
-  token_t() = delete;
+  friend class ExtentDesc;
 
-  ~token_t() = default;
+  friend class SmallMeta;
 
-  token_t(const token_t&) = delete;
+  friend class MediumMeta;
 
-  token_t& operator=(const token_t&) = delete;
+  friend class LargeBin;
 
+  friend class ThreadCache;
+
+ private:
   /**
-   * @brief to hire corresponding region
+   * @brief to hire corresponding region, mark this region as used with use mode and user-defined tag
    * @param mode use mode, true for persistent object, false for volatile object
-   * @param tag user defined marker/tag (zero by default)
-   * @param persist whether to write token back to storage medium immediately
+   * @param tag user defined marker/tag
+   * @param persist whether to write the token back to storage medium immediately
    * */
-  void hire(bool mode = true, uint8_t tag = 0, bool persist = true) {
+  void hire(bool mode, uint8_t tag, bool persist) {
     assert(token_ == kFreeCode && tag <= kMarkBits);
     uint8_t user = (mode ? kModeBit : 0) | tag;
     token_ = kInuseBit | user;
-    if(persist) {
-      persist_write_back(this, sizeof(token_t));
-      persist_wait_finish();
-    }
+    if(persist) wait_write_back(this, sizeof(token_t));
   }
 
   /**
@@ -80,11 +79,27 @@ class token_t {
   void fire(bool persist = true) {
     if(token_ != kFreeCode) {
       token_.store(kFreeCode, store_order);
-      if(persist) {
-        persist_write_back(this, sizeof(token_t));
-        persist_wait_finish();
-      }
+      if(persist) wait_write_back(this, sizeof(token_t));
     }
+  }
+
+ public:
+  token_t() = delete;
+
+  ~token_t() = default;
+
+  token_t(const token_t&) = delete;
+
+  token_t& operator=(const token_t&) = delete;
+
+  /**
+   * @brief publish an nvm object with its use mode and user-defined tag
+   * @param mode use mode, true for persistent object, false for volatile object
+   * @param tag user-defined marker/tag (zero by default)
+   * @param persist whether to write the token back to storage medium immediately
+   * */
+  void publish(bool mode = true, uint8_t tag = 0, bool persist = true) {
+    hire(mode, tag, persist);
   }
 
   /**

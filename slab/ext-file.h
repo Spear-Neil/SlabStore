@@ -35,8 +35,7 @@ class alignas(kPageSize) PersistRoot {
     for(auto& ptr : root_) {
       ptr.store(nullptr);
     }
-    persist_concur_flush(this, sizeof(PersistRoot));
-    persist_wait_finish();
+    wait_concur_flush(this, sizeof(PersistRoot));
   }
 
  public:

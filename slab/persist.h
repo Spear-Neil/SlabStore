@@ -53,6 +53,22 @@ using internal::persist_wait_finish;
 
 using internal::persist_serial_flush;
 
+/**
+ * @brief write back cache lines and wait until completion
+ * */
+inline void wait_write_back(void* ptr, size_t len) {
+  persist_write_back(ptr, len);
+  persist_wait_finish();
+}
+
+/**
+ * @brief concurrently flush cacheline and wait until completion
+ * */
+inline void wait_concur_flush(void* ptr, size_t len) {
+  persist_concur_flush(ptr, len);
+  persist_wait_finish();
+}
+
 }
 
 #endif //SLABSTORE_PERSIST_H

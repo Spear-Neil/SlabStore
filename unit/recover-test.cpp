@@ -22,7 +22,7 @@ int main(int argc, char* argv[]) {
       size_t obj_size = SizeClass().index2size(slab_ind);
       for(size_t i = 0; i < obj_count; i++) {
         region_t obj = allocator.acquire(obj_size);
-        obj.first->hire();
+        obj.first->publish();
       }
     }
 
@@ -30,7 +30,7 @@ int main(int argc, char* argv[]) {
       size_t obj_count = 100;
       for(size_t i = 0; i < obj_count; i++) {
         region_t obj = allocator.acquire(obj_size);
-        obj.first->hire();
+        obj.first->publish();
       }
     }
 
