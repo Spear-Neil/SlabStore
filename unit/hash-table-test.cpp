@@ -1,5 +1,6 @@
 #include <iostream>
 #include <tbb/parallel_for.h>
+#include <tbb/concurrent_hash_map.h>
 
 #include "../store/hash-table.h"
 #include "util.h"
@@ -8,10 +9,12 @@ using namespace SlabStore;
 using namespace util;
 
 int main() {
-  size_t nthd = 48, round = 10;
+  size_t nthd = 96, round = 10;
   size_t kv_count = 1'000'000'000;
+  size_t table_type = 0;
 
   HashTable<uint64_t, uint64_t> table;
+  tbb::concurrent_hash_map<uint64_t, uint64_t> map;
   typedef HashTable<uint64_t, uint64_t>::KVPair pair;
   tbb::task_arena arena(nthd);
   Timer timer;
@@ -20,7 +23,9 @@ int main() {
     tbb::parallel_for(tbb::blocked_range<size_t>(0, kv_count),
                       [&](const tbb::blocked_range<size_t>& range) {
                         for(size_t i = range.begin(); i < range.end(); i++) {
-                          table.upsert(new pair{.key = i, .value = i});
+                          if(table_type == 0) table.upsert(new pair{.key = i, .value = i});
+                          else if(table_type == 1) map.insert({i, i});
+                          else { exit(EXIT_FAILURE); }
                         }
                       });
   });
@@ -33,9 +38,16 @@ int main() {
       tbb::parallel_for(tbb::blocked_range<size_t>(0, kv_count),
                         [&](const tbb::blocked_range<size_t>& range) {
                           for(size_t i = range.begin(); i < range.end(); i++) {
-                            auto kv = table.lookup(i);
-                            if(kv == nullptr || kv->key != i)
-                              exit(EXIT_FAILURE);
+                            if(table_type == 0) {
+                              auto kv = table.lookup(i);
+                              if(kv == nullptr || kv->key != i)
+                                exit(EXIT_FAILURE);
+                            } else if(table_type == 1) {
+                              tbb::concurrent_hash_map<uint64_t, uint64_t>::const_accessor res;
+                              if(!map.find(res, i) || res->first != i) {
+                                exit(EXIT_FAILURE);
+                              }
+                            } else { exit(EXIT_FAILURE); }
                           }
                         });
     }
