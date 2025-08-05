@@ -199,7 +199,6 @@ class RunBin {
    * @return (meta of run, the start address of run)
    * */
   mrun_t mrun_acquire(size_t arena, size_t size, bool recover) {
-    // todo: physical page pre-allocation for runs of different size
     assert(type_ == kMedium);
     assert(size > kMaxSmallSize && size <= kMaxMediumSize);
     size_t bid = recover ? 1 : 0;
@@ -220,6 +219,7 @@ class RunBin {
     // check whether there are any free medium runs
     if(desc->locate_fmrun(rid) == desc->count()) bins_[bid].erase(it);
 
+    ext_case_->physical_space_alloc(run, rsize_); // physical page pre-allocation
     return {meta, run};
   }
 
@@ -260,6 +260,7 @@ class RunBin {
   void mrun_release(void* run, bool release, bool recover) {
     assert(type_ == kMedium);
     assert(!(!release && recover)); // half-used run can only inform normal bin
+    ext_case_->physical_space_reclaim(run, rsize_); // reclaim physical space first
     size_t bid = recover ? 1 : 0;
     LockGuard guard(lock_);
     ExtentDesc* desc = ext_case_->descriptor(run);
@@ -381,11 +382,12 @@ class LargeBin {
    * */
   void release(ExtentDesc* desc, void* ptr, bool recover) {
     assert(desc->size() == size_ && desc->rcase() == rcase_);
-    // todo: physical page release
     void* ext = (void*) rounddown((uintptr_t) ptr, kExtentSize);
     size_t ind = ((uintptr_t) ptr - (uintptr_t) ext) / desc->size(); // region index
     assert(ind < desc->count());
     desc->token(ind)->fire();  // persistently mark this region as free
+    ext_case_->physical_space_reclaim(ptr, desc->size()); // reclaim physical space
+
     bool free_ext = false;
     {
       size_t bid = recover ? 1 : 0;
@@ -564,11 +566,14 @@ class RunCase {
    * @param size the size of region
    * @param recover do allocation during recovering
    * */
-  region_t large_acquire(size_t size, bool recover) { // todo: physical page pre-allocation
+  region_t large_acquire(size_t size, bool recover) {
     assert(size > kMaxMediumSize && size <= kMaxLargeSize);
     size_t bid = index_most1((size - 1) / kMaxMediumSize);
     assert(bid < kLargeTypeCount);
-    return lbins_[bid].acquire(recover);
+    auto res = lbins_[bid].acquire(recover);
+    size_t physical_size = roundup(kPageSize, size);
+    ext_case_->physical_space_alloc(res, physical_size); // physical page pre-allocation
+    return res;
   }
 
   /**
