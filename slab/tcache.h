@@ -15,7 +15,7 @@
 
 #include "const.h"
 #include "arena.h"
-#include "token.h"
+#include "region.h"
 #include "size.h"
 #include "desc.h"
 #include "util.h"
@@ -47,7 +47,7 @@ class CacheBin {
    * @brief release the first region back to its corresponding arena
    * */
   void spill_front() {
-    auto [token, ptr] = regions_.front();
+    auto [token, ptr] = regions_.front().raw();
     regions_.pop_front();
     ExtentDesc* desc = ext_case_->descriptor(ptr);
     assert(desc->type() == kSmall || desc->type() == kMedium);

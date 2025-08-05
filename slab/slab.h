@@ -21,6 +21,7 @@
 #include "run.h"
 #include "arena.h"
 #include "tcache.h"
+#include "region.h"
 #include "util.h"
 
 namespace SlabStore {
@@ -439,6 +440,14 @@ class Allocator {
     ThreadCache& tcache = builder().locate();
     // as for release, we need to check whether the upcoming free region is allocated during recovering phase
     tcache.release(ptr, recovering);
+  }
+
+  /**
+   * @brief the max usable size of region corresponding to ptr
+   * */
+  size_t region_size(void* ptr) {
+    ExtentDesc* desc = ext_case_->descriptor(ptr);
+
   }
 };
 

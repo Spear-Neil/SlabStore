@@ -38,13 +38,12 @@ int main() {
         if(opcnt < 128) opcnt = 128;
         for(size_t i = 0; i < opcnt; i++) {
           region_t reg = allocator.acquire(size);
-          void* mem = reg.second;
-          assert(objs[tid].find(mem) == objs[tid].end());
-          objs[tid].insert(mem);
-          assert(mem != nullptr);
+          assert(objs[tid].find(reg.pointer()) == objs[tid].end());
+          objs[tid].insert(reg.pointer());
+          assert(reg.pointer() != nullptr);
           size_t ws = size % kPageSize;
-          memcpy(mem, words, ws);
-          persist_write_back(mem, ws);
+          memcpy(reg.pointer(), words, ws);
+          persist_write_back(reg.pointer(), ws);
           persist_wait_finish();
         }
         if(++count % 4 == 0) increment <<= 1;

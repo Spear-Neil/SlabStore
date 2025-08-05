@@ -10,7 +10,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <atomic>
-#include <tuple>
 
 #include "persist.h"
 
@@ -47,17 +46,15 @@ class token_t {
   static constexpr std::memory_order load_order = std::memory_order_relaxed;
   static constexpr std::memory_order store_order = std::memory_order_relaxed;
 
-  friend class ExtentDesc;
+ public:
+  token_t() = delete;
 
-  friend class SmallMeta;
+  ~token_t() = default;
 
-  friend class MediumMeta;
+  token_t(const token_t&) = delete;
 
-  friend class LargeBin;
+  token_t& operator=(const token_t&) = delete;
 
-  friend class ThreadCache;
-
- private:
   /**
    * @brief to hire corresponding region, mark this region as used with use mode and user-defined tag
    * @param mode use mode, true for persistent object, false for volatile object
@@ -83,45 +80,23 @@ class token_t {
     }
   }
 
- public:
-  token_t() = delete;
-
-  ~token_t() = default;
-
-  token_t(const token_t&) = delete;
-
-  token_t& operator=(const token_t&) = delete;
-
-  /**
-   * @brief publish an nvm object with its use mode and user-defined tag
-   * @param mode use mode, true for persistent object, false for volatile object
-   * @param tag user-defined marker/tag (zero by default)
-   * @param persist whether to write the token back to storage medium immediately
-   * */
-  void publish(bool mode = true, uint8_t tag = 0, bool persist = true) {
-    hire(mode, tag, persist);
-  }
-
   /**
    * @brief whether the region is being used
    * */
-  bool busy() { return token_.load(load_order) & kInuseBit; }
+  bool busy() const { return token_.load(load_order) & kInuseBit; }
 
   /**
    * @brief the use mode of corresponding memory object, true for persistent object, false for volatile object
    * */
-  bool mode() { return token_.load(load_order) & kModeBit; }
+  bool mode() const { return token_.load(load_order) & kModeBit; }
 
   /**
    * @brief user-defined marker
    * */
-  uint8_t marker() { return token_.load(load_order) & kMarkBits; }
+  uint8_t marker() const { return token_.load(load_order) & kMarkBits; }
 }; // memory object persistent token/marker type
 
 static_assert(sizeof(token_t) == 1);
-
-
-typedef std::pair<token_t*, void*> region_t; // region type, start address of a region and its token
 
 }
 

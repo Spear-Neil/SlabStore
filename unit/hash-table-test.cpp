@@ -9,7 +9,7 @@ using namespace SlabStore;
 using namespace util;
 
 int main() {
-  size_t nthd = 96, round = 2;
+  size_t nthd = 96, round = 10;
   size_t kv_count = 1'000'000'000;
   size_t table_type = 0;
 

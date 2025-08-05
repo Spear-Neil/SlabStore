@@ -24,17 +24,17 @@ int main(int argc, char* argv[]) {
       objects.insert(obj);
     }
     for(auto& obj : objects) {
-      allocator.release(obj.second);
+      allocator.release(obj);
     }
 
     objects.clear();
     for(size_t i = 0; i < obj_count; i++) {
       region_t obj = allocator.acquire(obj_size);
-      obj.first->publish();
+      obj.publish();
       objects.insert(obj);
     }
     for(auto& obj : objects) {
-      allocator.release(obj.second);
+      allocator.release(obj);
     }
   }
 
@@ -47,17 +47,17 @@ int main(int argc, char* argv[]) {
       objects.insert(obj);
     }
     for(auto& obj : objects) {
-      allocator.release(obj.second);
+      allocator.release(obj);
     }
 
     objects.clear();
     for(size_t i = 0; i < obj_count; i++) {
       region_t obj = allocator.acquire(obj_size);
       objects.insert(obj);
-      obj.first->publish();
+      obj.publish();
     }
     for(auto& obj : objects) {
-      allocator.release(obj.second);
+      allocator.release(obj);
     }
   }
 

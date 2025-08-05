@@ -14,7 +14,7 @@ int main(int argc, char* argv[]) {
   allocator.open("/home/sn/pmem/SlabStore/");
   if(!allocator.good()) {
     allocator.recover([&](region_t reg) {
-      allocator.release(reg.second);
+      allocator.release(reg.pointer());
     });
   } else {
     for(size_t slab_ind = 0; slab_ind < SlabConst::kNSlabsCached; slab_ind++) {
@@ -22,7 +22,7 @@ int main(int argc, char* argv[]) {
       size_t obj_size = SizeClass().index2size(slab_ind);
       for(size_t i = 0; i < obj_count; i++) {
         region_t obj = allocator.acquire(obj_size);
-        obj.first->publish();
+        obj.publish();
       }
     }
 
@@ -30,7 +30,7 @@ int main(int argc, char* argv[]) {
       size_t obj_count = 100;
       for(size_t i = 0; i < obj_count; i++) {
         region_t obj = allocator.acquire(obj_size);
-        obj.first->publish();
+        obj.publish();
       }
     }
 

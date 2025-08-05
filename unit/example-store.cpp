@@ -36,20 +36,20 @@ int main(int argc, char* argv[]) {
     recovery = true;
     if(replace) {
       allocator.recover([&](region_t old_obj) {
-        assert(old_obj.first->busy() && old_obj.first->mode() == true);
-        kv_t* old_kv = (kv_t*) old_obj.second;
+        assert(old_obj.busy() && old_obj.mode() == true);
+        kv_t* old_kv = (kv_t*) old_obj.pointer();
         auto new_obj = allocator.acquire(sizeof(kv_t));
-        ((kv_t*) new_obj.second)->key = old_kv->key;
-        ((kv_t*) new_obj.second)->value = old_kv->value;
-        wait_write_back(new_obj.second, sizeof(kv_t));
-        new_obj.first->publish();
-        allocator.release(old_obj.second);
-        table[((kv_t*) new_obj.second)->key] = (kv_t*) new_obj.second;
+        ((kv_t*) new_obj.pointer())->key = old_kv->key;
+        ((kv_t*) new_obj.pointer())->value = old_kv->value;
+        wait_write_back(new_obj.pointer(), sizeof(kv_t));
+        new_obj.publish();
+        allocator.release(old_obj.pointer());
+        table[((kv_t*) new_obj.pointer())->key] = (kv_t*) new_obj.pointer();
       });
     } else {
       allocator.recover([&](region_t reg) {
         assert(reg.first->busy() && reg.first->mode() == true);
-        kv_t* kv = (kv_t*) reg.second;
+        kv_t* kv = (kv_t*) reg.pointer();
         table[kv->key] = kv;
       });
     }
@@ -60,13 +60,13 @@ int main(int argc, char* argv[]) {
   if(!recovery) {
     timer.start();
     for(size_t key = 0; key < key_range; key++) {
-      auto [token, obj] = allocator.acquire(sizeof(kv_t));
-      ((kv_t*) obj)->key = key;
-      memcpy(((kv_t*) obj)->value.vstr, common_value, kValueLen);
+      auto obj = allocator.acquire(sizeof(kv_t));
+      ((kv_t*) obj.pointer())->key = key;
+      memcpy(((kv_t*) obj.pointer())->value.vstr, common_value, kValueLen);
       persist_write_back(obj, sizeof(kv_t));
       persist_wait_finish();
-      token->publish();
-      table.insert({key, (kv_t*) obj});
+      obj.publish();
+      table.insert({key, (kv_t*) obj.pointer()});
     }
     long drt = timer.duration_us();
     std::cout << "[INFO]: insert tpt: " << double(key_range) / drt << std::endl;

@@ -15,6 +15,7 @@
 
 #include "const.h"
 #include "token.h"
+#include "region.h"
 #include "desc.h"
 #include "util.h"
 
