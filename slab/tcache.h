@@ -129,7 +129,7 @@ class CacheBin {
    * @brief release a region back to thread local cache bin
    * */
   void release(region_t obj) {
-    assert(!obj.first->busy());
+    assert(!obj.busy());
     regions_.push_back(obj);
     // excess regions are drained to arena
     spill_cache_bin();
@@ -298,6 +298,31 @@ class ThreadCache {
         fprintf(stderr, "[ERROR]: release, unknown type\n");
         exit(EXIT_FAILURE);
     }
+  }
+
+  /**
+   * @brief the max usable size of regions corresponding to ptr
+   * */
+  size_t region_size(void* ptr) {
+    if(branch_unlikely(ptr == nullptr)) return 0;
+
+    ExtentDesc* desc = ext_case_->descriptor(ptr);
+    uintptr_t ext = rounddown((uintptr_t) ptr, kExtentSize);
+    size_t rsize = 0, rid = 0;
+    switch(desc->type()) {
+      case kSmall:
+        rsize = desc->size(), rid = ((uintptr_t) ptr - ext) / rsize;
+        return ((SmallMeta*) ((uintptr_t) ext + rsize * rid))->size();
+      case kMedium:
+        rsize = desc->size(), rid = ((uintptr_t) ptr - ext) / rsize;
+        return ((MediumMeta*) desc->runs() + rid)->size();
+      case kLarge:
+        return desc->size();
+      default:
+        fprintf(stderr, "[ERROR]: release, unknown type\n");
+        exit(EXIT_FAILURE);
+    }
+    assert(false);
   }
 };
 

@@ -48,7 +48,7 @@ int main(int argc, char* argv[]) {
       });
     } else {
       allocator.recover([&](region_t reg) {
-        assert(reg.first->busy() && reg.first->mode() == true);
+        assert(reg.busy() && reg.mode() == true);
         kv_t* kv = (kv_t*) reg.pointer();
         table[kv->key] = kv;
       });

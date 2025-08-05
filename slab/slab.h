@@ -446,8 +446,8 @@ class Allocator {
    * @brief the max usable size of region corresponding to ptr
    * */
   size_t region_size(void* ptr) {
-    ExtentDesc* desc = ext_case_->descriptor(ptr);
-
+    ThreadCache& tcache = builder().locate();
+    return tcache.region_size(ptr);
   }
 };
 
