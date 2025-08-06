@@ -21,7 +21,7 @@ static_assert(kValueLen <= 1024);
 
 int main(int argc, char* argv[]) {
   bool recovery = false;
-  bool replace = true;
+  bool replace = true; // test for allocation during recovery
 
 //  std::map<size_t, kv_t*> table;
   std::unordered_map<size_t, kv_t*> table;
