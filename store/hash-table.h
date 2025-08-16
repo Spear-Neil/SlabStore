@@ -12,12 +12,15 @@
 #include <cassert>
 #include <atomic>
 #include <cstring>
+#include <type_traits>
 #include <unordered_set>
 
 #include "util.h"
 
 /**
  * @brief an brief implementation of concurrent extendible hash table
+ * @note currently, we do not implement delete/remove operation and
+ * hence we also do not care about how to shrink the hash table.
  * */
 namespace SlabStore {
 
@@ -28,14 +31,16 @@ using util::popcount;
 using util::index_least0;
 using util::index_least1;
 using util::cmpeq_int8_simd128;
+using util::cpu_pause;
 using util::String;
 using util::Epoch;
 using util::VerLock;
 using util::DensePointer;
 using util::AtomicDense;
 
-struct HashConfig {
+struct DefaultHashConfig {
   static constexpr bool kInMemStore = true;        // all kv pairs reside in memory
+  static constexpr bool kOptUpdate = false;        // cas optimized update
   static constexpr size_t kNSlotInBucket = 48;     // the number of slots in a hash bucket
   static constexpr size_t kNBucketInSegment = 64;  // the number of buckets in a hash segment
   static constexpr size_t kInitDepth = 4;          // init global depth, 2^4 = 16, 2 cache lines
@@ -63,10 +68,11 @@ inline size_t segment_index(uint64_t code, size_t depth) { return code & ((0x01u
 
 enum StatusCode { kNotFound = 0, kNoSpace = 1 };
 
-template<typename K, typename V>
+template<typename K, typename V, typename HashConfig>
 class alignas(64) HashBucket {
   typedef util::KVPair<K, V> KVPair;
   static constexpr bool kInMemStore = HashConfig::kInMemStore;
+  static constexpr bool kOptUpdate = HashConfig::kOptUpdate;
   static constexpr size_t kNSlot = HashConfig::kNSlotInBucket;
   static constexpr size_t kNBucket = HashConfig::kNBucketInSegment;
   static constexpr std::memory_order load_order = std::memory_order_relaxed;
@@ -130,7 +136,15 @@ class alignas(64) HashBucket {
       size_t idx = index_least1(mask);
       void* kv = left.kvs_[idx].load(load_order).pointer();
       uint64_t code = hash_code(((KVPair*) kv)->key);
-      if(code & move_mask) candidates |= 0x01ul << idx;
+      if(code & move_mask) {
+        candidates |= 0x01ul << idx;
+        if(kOptUpdate) { // get the latest kv order, because other threads may update this kv simultaneously
+          auto latest = left.kvs_[idx].exchange(DensePointer());
+          if(kvs_[idx].load(load_order) != latest) {
+            kvs_[idx].store(latest, store_order);
+          }
+        } // leads to a little overhead
+      }
       mask &= ~(0x01ul << idx);
     }
 
@@ -168,7 +182,11 @@ class alignas(64) HashBucket {
       DensePointer old = kvs_[idx].load(load_order);
       if(old.remain() == slot_tag(code) &&
          ((KVPair*) old.pointer())->key == kv->key) {
-        kvs_[idx].store(DensePointer(kv, slot_tag(code)), store_order);
+        if(kOptUpdate) {
+          old = kvs_[idx].exchange(DensePointer(kv, slot_tag(code)));
+        } else {
+          kvs_[idx].store(DensePointer(kv, slot_tag(code)), store_order);
+        }
         return (KVPair*) old.pointer();
       } // update existing kv succeed
       mask &= ~(0x01ul << idx);
@@ -187,6 +205,41 @@ class alignas(64) HashBucket {
   }
 
   /**
+   * @brief cas optimized update operation, without holding a lock on the bucket
+   * @note only valid when kOptUpdate == true
+   * */
+  template<bool Enable = kOptUpdate, std::enable_if_t<Enable, int> = 0>
+  KVPair* update(KVPair* kv, uint64_t code) {
+    assert(kv != nullptr && hash_code(kv->key) == code);
+    assert(bucket_index(code, kNBucket) == index_);
+    uint64_t mask = bitmap_ & compare_equal(tags_, bucket_tag(code));
+    while(mask) {
+      int idx = index_least1(mask);
+      DensePointer old = kvs_[idx].load(load_order);
+      while(old != DensePointer() && old.remain() == slot_tag(code)
+            && ((KVPair*) old.pointer())->key == kv->key) {
+        if(kvs_[idx].compare_exchange_strong(old, DensePointer(kv, slot_tag(code)))) {
+          return (KVPair*) old.pointer(); // update succeed
+        }
+        cpu_pause();
+        old = kvs_[idx].load(load_order);
+      }
+      mask &= ~(0x01ul << idx);
+    }
+
+    // failed because another thread has moved this kv to another bucket
+    // failed because the corresponding kv doesn't exist
+    return (KVPair*) kNotFound;
+  }
+
+  /**
+   * @brief disable update operation if kOptUpdate is false
+   * @note maybe I should use static label forwarding, SFINAE is interesting but a little antihuman
+   * */
+  template<bool Enable = kOptUpdate, std::enable_if_t<!Enable, int> = 0>
+  KVPair* update(KVPair* kv, uint64_t code) = delete;
+
+  /**
    * @brief lookup a key-value pair in current bucket
    * @param kv the key-value pair trying to lookup
    * @param code the corresponding hash code of key
@@ -199,8 +252,8 @@ class alignas(64) HashBucket {
     while(mask) { // check whether the key exists or not
       size_t idx = index_least1(mask);
       DensePointer kv = kvs_[idx].load(load_order);
-      if(kv.remain() == slot_tag(code) &&
-         ((KVPair*) kv.pointer())->key == key) {
+      if(kv != DensePointer() && kv.remain() == slot_tag(code)
+         && ((KVPair*) kv.pointer())->key == key) {
         return (KVPair*) kv.pointer();
       } // lookup corresponding kv succeed
       mask &= ~(0x01ul << idx);
@@ -211,10 +264,9 @@ class alignas(64) HashBucket {
   }
 };
 
-template<typename K, typename V>
+template<typename K, typename V, typename HashConfig>
 class alignas(64) HashSegment {
-  typedef util::KVPair<K, V> KVPair;
-  typedef HashBucket<K, V> Bucket;
+  typedef HashBucket<K, V, HashConfig> Bucket;
   static constexpr size_t kNBucketInSegment = HashConfig::kNBucketInSegment;
 
   Bucket buckets_[kNBucketInSegment];
@@ -281,10 +333,10 @@ class alignas(64) HashSegment {
   }
 };
 
-template<typename K, typename V>
+template<typename K, typename V, typename HashConfig = DefaultHashConfig>
 class alignas(32) HashTable {
-  typedef HashBucket<K, V> Bucket;
-  typedef HashSegment<K, V> Segment;
+  typedef HashBucket<K, V, HashConfig> Bucket;
+  typedef HashSegment<K, V, HashConfig> Segment;
   static constexpr size_t kInitDepth = HashConfig::kInitDepth;
   static constexpr size_t kNSlotInBucket = HashConfig::kNSlotInBucket;
   static constexpr size_t kNBucketInSegment = HashConfig::kNBucketInSegment;
@@ -360,6 +412,7 @@ class alignas(32) HashTable {
    * @return the old key-value pair
    * */
   KVPair* upsert(KVPair* kv) {
+    assert(kv != nullptr);
     uint64_t code = hash_code(kv->key);
     Segment** dir = nullptr;
     size_t global = 0, local = 0;
@@ -420,6 +473,32 @@ class alignas(32) HashTable {
   }
 
   /**
+   * @brief update an existing kv using cas primitive without lock the corresponding bucket
+   * @note This function is valid only when kOptUpdate is enabled
+   * */
+  KVPair* update(KVPair* kv) {
+    assert(kv != nullptr);
+    uint64_t code = hash_code(kv->key);
+    Segment** dir = nullptr;
+    size_t global = 0, local = 0;
+
+    while(true) {
+      uint64_t version_dir = lock_.lock_shared();
+      dir = dir_, global = depth_;
+      if(lock_.version_changed(version_dir)) continue;
+
+      size_t index = segment_index(code, global);
+      Bucket* bucket = dir[index]->bucket(code);
+      uint64_t version = bucket->lock().lock_shared();
+      if(!lock_.unlock_shared(version_dir)) continue;
+      KVPair* old = bucket->update(kv, code);
+      if(old != (KVPair*) kNotFound) return old; // update succeed
+      if(bucket->lock().unlock_shared(version)) break;
+    }
+    return (KVPair*) kNotFound; // failed
+  }
+
+  /**
    * @brief lookup an existing key-value pair with given key
    * @param key the corresponding key
    * @return key-value pair to be required
@@ -439,9 +518,10 @@ class alignas(32) HashTable {
       uint64_t version = bucket->lock().lock_shared();
       if(!lock_.unlock_shared(version_dir)) continue;
       KVPair* kv = bucket->lookup(key, code);
-      if(bucket->lock().unlock_shared(version)) return kv;
+      if(kv != (KVPair*) kNotFound) return kv; // find it
+      if(bucket->lock().unlock_shared(version)) break;
     }
-    assert(false);
+    return (KVPair*) kNotFound;
   }
 
   /**
@@ -488,6 +568,7 @@ class alignas(32) HashTable {
 
 }
 
+using internal::DefaultHashConfig;
 using internal::HashTable;
 
 }

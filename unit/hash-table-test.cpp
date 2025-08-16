@@ -9,10 +9,12 @@ using namespace SlabStore;
 using namespace util;
 
 int main() {
-  size_t nthd = 96, round = 10;
+
+  size_t nthd = 96, round = 1;
   size_t kv_count = 1'000'000'000;
   size_t table_type = 0;
 
+  PinningMap::set_numa_policy();
   HashTable<uint64_t, uint64_t> table;
   tbb::concurrent_hash_map<uint64_t, uint64_t> map;
   typedef HashTable<uint64_t, uint64_t>::KVPair pair;
