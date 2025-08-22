@@ -37,7 +37,7 @@ class region_t {
   void* pointer() const { return pair_.second; }
 
   /**
-   * @brief publish an nvm object with its use mode and user-defined tag
+   * @brief set_control an nvm object with its use mode and user-defined tag
    * @param mode use mode, true for persistent object, false for volatile object
    * @param tag user-defined marker/tag (zero by default), [0, 63]
    * @param persist whether to write the token back to storage medium immediately

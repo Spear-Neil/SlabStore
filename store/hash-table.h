@@ -41,6 +41,7 @@ using util::AtomicDense;
 struct DefaultHashConfig {
   static constexpr bool kInMemStore = true;        // all kv pairs reside in memory
   static constexpr bool kOptUpdate = false;        // cas optimized update
+  static constexpr bool kTimeStamp = false;        // timestamp for update, precondition: kOptUpdate is enabled
   static constexpr size_t kNSlotInBucket = 48;     // the number of slots in a hash bucket
   static constexpr size_t kNBucketInSegment = 64;  // the number of buckets in a hash segment
   static constexpr size_t kInitDepth = 4;          // init global depth, 2^4 = 16, 2 cache lines
@@ -54,7 +55,7 @@ struct DefaultHashConfig {
 template<typename K>
 inline uint64_t hash_code(const K& key) {
   if constexpr(std::is_same<K, String>()) {
-    return hash(key.str, key.len);
+    return hash((void*) key.str, key.len);
   } else { return hash(key); }
 }
 
@@ -66,13 +67,14 @@ inline uint16_t slot_tag(uint64_t code) { return (code >> 32) & 0xFFFFul; }
 
 inline size_t segment_index(uint64_t code, size_t depth) { return code & ((0x01ul << depth) - 1); }
 
-enum StatusCode { kNotFound = 0, kNoSpace = 1 };
+enum StatusCode { kNotFound = 0, kNoSpace = 1, kExpired = 2 };
 
 template<typename K, typename V, typename HashConfig>
 class alignas(64) HashBucket {
   typedef util::KVPair<K, V> KVPair;
   static constexpr bool kInMemStore = HashConfig::kInMemStore;
   static constexpr bool kOptUpdate = HashConfig::kOptUpdate;
+  static constexpr bool kTimeStamp = HashConfig::kTimeStamp;
   static constexpr size_t kNSlot = HashConfig::kNSlotInBucket;
   static constexpr size_t kNBucket = HashConfig::kNBucketInSegment;
   static constexpr std::memory_order load_order = std::memory_order_relaxed;
@@ -109,7 +111,7 @@ class alignas(64) HashBucket {
   HashBucket() : lock_(), bitmap_(0), depth_(0), index_(0), tags_{}, kvs_{} {}
 
   ~HashBucket() {
-    if(kInMemStore) {
+    if constexpr(kInMemStore) {
       uint64_t mask = bitmap_;
       while(mask) {
         size_t idx = index_least1(mask);
@@ -138,7 +140,7 @@ class alignas(64) HashBucket {
       uint64_t code = hash_code(((KVPair*) kv)->key);
       if(code & move_mask) {
         candidates |= 0x01ul << idx;
-        if(kOptUpdate) { // get the latest kv order, because other threads may update this kv simultaneously
+        if constexpr(kOptUpdate) { // get the latest kv order, because other threads may update this kv simultaneously
           auto latest = left.kvs_[idx].exchange(DensePointer());
           if(kvs_[idx].load(load_order) != latest) {
             kvs_[idx].store(latest, store_order);
@@ -182,8 +184,22 @@ class alignas(64) HashBucket {
       DensePointer old = kvs_[idx].load(load_order);
       if(old.remain() == slot_tag(code) &&
          ((KVPair*) old.pointer())->key == kv->key) {
-        if(kOptUpdate) {
-          old = kvs_[idx].exchange(DensePointer(kv, slot_tag(code)));
+        if constexpr(kOptUpdate) {
+          if constexpr(kTimeStamp) { // for pmem hash store
+            while(true) {
+              if(((KVPair*) old.pointer())->load_version() >= kv->load_version()) {
+                return (KVPair*) kExpired; // the kv is expired
+              }
+              if(kvs_[idx].compare_exchange_strong(old, DensePointer(kv, slot_tag(code)))) {
+                break;
+              }
+
+              cpu_pause(); // pause and then reload the latest
+              old = kvs_[idx].load(load_order);
+            }
+          } else { // get the latest kv, and update
+            old = kvs_[idx].exchange(DensePointer(kv, slot_tag(code)));
+          }
         } else {
           kvs_[idx].store(DensePointer(kv, slot_tag(code)), store_order);
         }
@@ -218,10 +234,16 @@ class alignas(64) HashBucket {
       DensePointer old = kvs_[idx].load(load_order);
       while(old != DensePointer() && old.remain() == slot_tag(code)
             && ((KVPair*) old.pointer())->key == kv->key) {
+        if constexpr(kTimeStamp) { // for pmem hash store
+          if(((KVPair*) old.pointer())->load_version() >= kv->load_version()) {
+            return (KVPair*) kExpired; // the kv is expired
+          }
+        }
         if(kvs_[idx].compare_exchange_strong(old, DensePointer(kv, slot_tag(code)))) {
           return (KVPair*) old.pointer(); // update succeed
         }
-        cpu_pause();
+
+        cpu_pause();// pause and then reload the latest
         old = kvs_[idx].load(load_order);
       }
       mask &= ~(0x01ul << idx);
@@ -409,11 +431,11 @@ class alignas(32) HashTable {
   /**
    * @brief insert a key-value pair or update an existing key-value pair
    * @param kv the key-value pair to be inserted or updated
+   * @param code corresponding hash code of the kv.key
    * @return the old key-value pair
    * */
-  KVPair* upsert(KVPair* kv) {
-    assert(kv != nullptr);
-    uint64_t code = hash_code(kv->key);
+  KVPair* upsert(KVPair* kv, uint64_t code) {
+    assert(kv != nullptr && code == hash_code(kv->key));
     Segment** dir = nullptr;
     size_t global = 0, local = 0;
 
@@ -472,13 +494,16 @@ class alignas(32) HashTable {
     assert(false); // not reach
   }
 
+  KVPair* upsert(KVPair* kv) { return upsert(kv, hash_code(kv->key)); }
+
   /**
    * @brief update an existing kv using cas primitive without lock the corresponding bucket
+   * @param kv the key-value pair to be updated
+   * @param code corresponding hash code of the kv.key
    * @note This function is valid only when kOptUpdate is enabled
    * */
-  KVPair* update(KVPair* kv) {
-    assert(kv != nullptr);
-    uint64_t code = hash_code(kv->key);
+  KVPair* update(KVPair* kv, uint64_t code) {
+    assert(kv != nullptr && code == hash_code(kv->key));
     Segment** dir = nullptr;
     size_t global = 0, local = 0;
 
@@ -498,13 +523,16 @@ class alignas(32) HashTable {
     return (KVPair*) kNotFound; // failed
   }
 
+  KVPair* update(KVPair* kv) { return update(kv, hash_code(kv->key)); }
+
   /**
    * @brief lookup an existing key-value pair with given key
    * @param key the corresponding key
+   * @param code corresponding hash code of key
    * @return key-value pair to be required
    * */
-  KVPair* lookup(const K& key) {
-    uint64_t code = hash_code(key);
+  KVPair* lookup(const K& key, uint64_t code) {
+    assert(code == hash_code(key));
     Segment** dir = nullptr;
     size_t global = 0, local = 0;
 
@@ -523,6 +551,8 @@ class alignas(32) HashTable {
     }
     return (KVPair*) kNotFound;
   }
+
+  KVPair* lookup(const K& key) { return lookup(key, hash_code(key)); }
 
   /**
    * @brief directory size (segment entry count), thread-unsafe
