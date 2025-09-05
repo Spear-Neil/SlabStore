@@ -69,6 +69,9 @@ inline size_t segment_index(uint64_t code, size_t depth) { return code & ((0x01u
 
 enum StatusCode { kNotFound = 0, kNoSpace = 1, kExpired = 2 };
 
+template<typename K, typename V, typename C>
+class HashSegment;
+
 template<typename K, typename V, typename HashConfig>
 class alignas(64) HashBucket {
   typedef util::KVPair<K, V> KVPair;
@@ -86,6 +89,8 @@ class alignas(64) HashBucket {
   uint8_t index_;            // bucket index in the corresponding segment
   uint8_t tags_[kNSlot];     // 8-bit bucket tag of the corresponding kvs.key
   AtomicDense kvs_[kNSlot];  // pointer kv with its 16-bit slot tag
+
+  friend class HashSegment<K, V, HashConfig>;
 
  private:
   uint64_t compare_equal(void* p, char c) const {
@@ -109,6 +114,16 @@ class alignas(64) HashBucket {
    * @brief default constructor, create an empty bucket
    * */
   HashBucket() : lock_(), bitmap_(0), depth_(0), index_(0), tags_{}, kvs_{} {}
+
+  /**
+   * @brief construct hash bucket from following arguments
+   * */
+  HashBucket(uint64_t bitmap, uint8_t depth, uint8_t index, uint8_t* tags, DensePointer* kvs) :
+    lock_(), bitmap_(bitmap), depth_(depth), index_(index), tags_{}, kvs_{} {
+    for(size_t tid = 0; tid < kNSlot; tid++) {
+      tags_[tid] = tags[tid], kvs_[tid].store(kvs[tid], store_order);
+    }
+  }
 
   ~HashBucket() {
     if constexpr(kInMemStore) {
@@ -158,9 +173,27 @@ class alignas(64) HashBucket {
 
   VerLock& lock() { return lock_; }
 
-  uint8_t& depth() { return depth_; }
+  uint64_t bitmap() const { return bitmap_; }
 
-  uint8_t& index() { return index_; }
+  uint8_t depth() const { return depth_; }
+
+  uint8_t index() const { return index_; }
+
+  /**
+   * @brief get tags by index
+   * */
+  uint8_t tags(size_t ind) const {
+    assert(ind < kNSlot);
+    return tags_[ind];
+  }
+
+  /**
+   * @brief get kvs by index
+   * */
+  DensePointer kvs(size_t ind) const {
+    assert(ind < kNSlot);
+    return kvs_[ind].load(load_order);
+  }
 
   /**
    * @brief number of kv pairs in current bucket, thread unsafe
@@ -300,7 +333,7 @@ class alignas(64) HashSegment {
    * */
   explicit HashSegment(size_t depth) : buckets_{} {
     for(size_t ind = 0; ind < kNBucketInSegment; ind++) {
-      buckets_[ind].index() = ind, buckets_[ind].depth() = depth;
+      buckets_[ind].depth_ = depth, buckets_[ind].index_ = ind;
     }
   }
 
@@ -329,10 +362,12 @@ class alignas(64) HashSegment {
   void unlock_exclusive() { for(auto& bucket : buckets_) bucket.lock().unlock_exclusive(); }
 
   /**
-   * @brief get corresponding bucket
-   * @param code hashcode of the corresponding key
+   * @brief get corresponding bucket by index
    * */
-  Bucket* bucket(size_t code) { return &buckets_[bucket_index(code, kNBucketInSegment)]; }
+  Bucket* bucket(size_t ind) {
+    assert(ind < kNBucketInSegment);
+    return &buckets_[ind];
+  }
 
   /**
    * @brief local depth of this segment, thread unsafe
@@ -357,8 +392,12 @@ class alignas(64) HashSegment {
 
 template<typename K, typename V, typename HashConfig = DefaultHashConfig>
 class alignas(32) HashTable {
+ public:
   typedef HashBucket<K, V, HashConfig> Bucket;
   typedef HashSegment<K, V, HashConfig> Segment;
+  typedef util::KVPair<K, V> KVPair;
+
+ private:
   static constexpr size_t kInitDepth = HashConfig::kInitDepth;
   static constexpr size_t kNSlotInBucket = HashConfig::kNSlotInBucket;
   static constexpr size_t kNBucketInSegment = HashConfig::kNBucketInSegment;
@@ -383,8 +422,6 @@ class alignas(32) HashTable {
   };
 
  public:
-  typedef util::KVPair<K, V> KVPair;
-
   /**
    * @brief create a new hash table
    * @param global init global depth (segment entry count / directory size = 2 ^ global)
@@ -400,6 +437,21 @@ class alignas(32) HashTable {
       if(ind < segment_count) dir_[ind] = new Segment(local);
       else dir_[ind] = dir_[ind % segment_count];
     }
+  }
+
+  /**
+   * @brief create a hash table from a hand-crafted pre-built table
+   * @param global global depth of pre-built table
+   * @param dir directory of pre-built table
+   * @note the segments belonging to the pre-build table are moved to the new table
+   * */
+  HashTable(size_t global, Segment** dir) :
+    lock_(), dir_(nullptr), depth_(global), epoch_(nullptr) {
+    assert(dir != nullptr && global <= 32);
+    size_t count = 0x01ul << global;
+    dir_ = new Segment* [count], epoch_ = new Epoch();
+    for(size_t ind = 0; ind < count; ind++)
+      dir_[ind] = dir[ind], dir[ind] = nullptr;
   }
 
   ~HashTable() {
@@ -438,6 +490,7 @@ class alignas(32) HashTable {
     assert(kv != nullptr && code == hash_code(kv->key));
     Segment** dir = nullptr;
     size_t global = 0, local = 0;
+    size_t bid = bucket_index(code, kNBucketInSegment);
 
     while(true) {
       uint64_t version = lock_.lock_shared();
@@ -449,7 +502,7 @@ class alignas(32) HashTable {
       size_t index = segment_index(code, global);
 
       { // insert a new key-value pair or update an existing key-value pair
-        Bucket* bucket = dir[index]->bucket(code);
+        Bucket* bucket = dir[index]->bucket(bid);
         // lock the corresponding bucket
         ExclusiveGuard guard(bucket->lock());
         // make sure we get the correct bucket (because some other threads may have moved some
@@ -506,6 +559,7 @@ class alignas(32) HashTable {
     assert(kv != nullptr && code == hash_code(kv->key));
     Segment** dir = nullptr;
     size_t global = 0, local = 0;
+    size_t bid = bucket_index(code, kNBucketInSegment);
 
     while(true) {
       uint64_t version_dir = lock_.lock_shared();
@@ -513,7 +567,7 @@ class alignas(32) HashTable {
       if(lock_.version_changed(version_dir)) continue;
 
       size_t index = segment_index(code, global);
-      Bucket* bucket = dir[index]->bucket(code);
+      Bucket* bucket = dir[index]->bucket(bid);
       uint64_t version = bucket->lock().lock_shared();
       if(!lock_.unlock_shared(version_dir)) continue;
       KVPair* old = bucket->update(kv, code);
@@ -531,10 +585,11 @@ class alignas(32) HashTable {
    * @param code corresponding hash code of key
    * @return key-value pair to be required
    * */
-  KVPair* lookup(const K& key, uint64_t code) {
+  KVPair* lookup(const K& key, uint64_t code) const {
     assert(code == hash_code(key));
     Segment** dir = nullptr;
     size_t global = 0, local = 0;
+    size_t bid = bucket_index(code, kNBucketInSegment);
 
     while(true) {
       uint64_t version_dir = lock_.lock_shared();
@@ -542,7 +597,7 @@ class alignas(32) HashTable {
       if(lock_.version_changed(version_dir)) continue;
 
       size_t index = segment_index(code, global);
-      Bucket* bucket = dir[index]->bucket(code);
+      Bucket* bucket = dir[index]->bucket(bid);
       uint64_t version = bucket->lock().lock_shared();
       if(!lock_.unlock_shared(version_dir)) continue;
       KVPair* kv = bucket->lookup(key, code);
@@ -552,7 +607,28 @@ class alignas(32) HashTable {
     return (KVPair*) kNotFound;
   }
 
-  KVPair* lookup(const K& key) { return lookup(key, hash_code(key)); }
+  KVPair* lookup(const K& key) const { return lookup(key, hash_code(key)); }
+
+  /**
+   * @brief swap the content, thread-unsafe
+   * */
+  void swap(HashTable& other) {
+    std::swap(dir_, other.dir_);
+    std::swap(depth_, other.depth_);
+  }
+
+  /**
+   * @brief get segment by index, thread-unsafe
+   * */
+  Segment* segment(size_t ind) const {
+    assert(ind < directory_size());
+    return dir_[ind];
+  }
+
+  /**
+   * @brief global depth, thread-unsafe
+   * */
+  size_t depth() const { return depth_; }
 
   /**
    * @brief directory size (segment entry count), thread-unsafe

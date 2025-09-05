@@ -10,7 +10,7 @@ if (NOT SSE2_ENABLE)
 endif ()
 
 link_libraries(pthread numa jemalloc tbb)
-add_compile_options(-march=native -fopt-info-vec-optimized)
+add_compile_options(-march=native) #-fopt-info-vec-optimized)
 
 add_subdirectory(unit)
 add_executable(SlabStore main.cpp)

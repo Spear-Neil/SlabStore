@@ -42,6 +42,7 @@ class ExtentCase {
 
   tbb::concurrent_unordered_set<ExtentDesc*> recs_; // extents allocated during recovering
 
+  static constexpr bool kLogInfo = SlabConst::kLogInfo;
   static constexpr size_t kDefaultSize = -1;  // use capacity size of nvm device as pool size
   static constexpr size_t kExtentSize = SlabConst::kExtentSize;
   static constexpr size_t kPoolSizeAlign = SlabConst::kPoolSizeAlign;
@@ -117,7 +118,9 @@ class ExtentCase {
  public:
   ExtentCase() : lock_(), path_(), size_(-1), meta_(), extent_() {}
 
-  ~ExtentCase() = default;
+  ~ExtentCase() {
+    if(kLogInfo) { printf("[CLOSE]: %s\n", path_.data()); }
+  }
 
   ExtentCase(const ExtentCase&) = delete;
 

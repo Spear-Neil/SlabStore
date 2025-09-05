@@ -14,6 +14,9 @@
 #include <functional>
 #include <vector>
 #include <thread>
+#include <mutex>
+#include <unordered_set>
+#include <tbb/concurrent_hash_map.h>
 
 #include "const.h"
 #include "extent.h"
@@ -31,7 +34,7 @@ using util::MutexLock;
 using util::LockGuard;
 using util::PinningMap;
 
-class Allocator {
+class AllocatorDetail {
   ExtentCase* ext_case_; // extent manager for extent (de-)allocation, physical page (de-)allocation, etc.
   SizeClass* sc_;        // mutual conversion between cache bin index and slab size
   size_t nruns_;         // the number of RunCase
@@ -41,50 +44,13 @@ class Allocator {
   bool ok_;              // allocator state (whether the allocator is ok for allocation)
   bool recovering;       // in the process of rebuilding allocator metadata and user-defined data structure
 
+  typedef tbb::concurrent_hash_map<std::thread::id, ThreadCache*> tsd_t;
+  tsd_t tsd_; // thread specific data
+
   static constexpr size_t kCorePerArena = SlabConst::kCorePerArena;
   static constexpr size_t kCorePerRunCase = SlabConst::kCorePerRunCase;
 
  private:
-  /**
-   * @brief construction and destruction operations of thread local cache
-   * */
-  class TcacheBuilder {
-    bool destroyed_;
-    ThreadCache* tcache_;
-
-   public:
-    explicit TcacheBuilder(Allocator& allocator)
-      : destroyed_(false), tcache_(nullptr) {
-      ExtentCase* ext_case = allocator.ext_case_;
-      RunCase* rcases = allocator.run_cases_;
-      Arena* arenas = allocator.arenas_;
-      Arena* arena = allocator.choose_arena();
-      tcache_ = new ThreadCache(ext_case, allocator.sc_, rcases, arenas, arena);
-    }
-
-    TcacheBuilder(const TcacheBuilder&) = delete;
-
-    TcacheBuilder& operator=(const TcacheBuilder&) = delete;
-
-    /**
-     * @brief locate thread local cache
-     * */
-    ThreadCache& locate() { return *tcache_; }
-
-    /**
-     * @brief release all regions back to arena
-     * */
-    void destroy() {
-      // avoid main thread cache double destruction/free
-      if(!destroyed_) {
-        delete tcache_;
-        destroyed_ = true;
-      }
-    }
-
-    ~TcacheBuilder() { destroy(); }
-  };
-
   /**
    * @brief choose arena for thread local cache
    * */
@@ -105,11 +71,30 @@ class Allocator {
   }
 
   /**
-   * @brief get thread cache builder
+   * @brief get/create thread local cache
    * */
-  TcacheBuilder& builder() {
-    static thread_local TcacheBuilder builder(*this);
-    return builder;
+  ThreadCache& thread_cache() {
+    static thread_local struct {
+      AllocatorDetail* alloc = nullptr;
+      ThreadCache* tlc = nullptr;
+    } local;
+
+    // switch between different thread cache
+    if(branch_unlikely(local.alloc != this)) {
+      local.alloc = this;
+
+      auto tid = std::this_thread::get_id();
+      tsd_t::const_accessor accessor;
+      bool found = tsd_.find(accessor, tid);
+      if(!found) { // lazily create thread local cache
+        Arena* arena = this->choose_arena();
+        local.tlc = new ThreadCache(ext_case_, sc_, run_cases_, arenas_, arena);
+        bool ins = tsd_.insert(accessor, {tid, local.tlc});
+        assert(ins == true);
+      } else { local.tlc = accessor->second; }
+    }
+
+    return *local.tlc;
   }
 
   /**
@@ -285,8 +270,8 @@ class Allocator {
   }
 
  public:
-  Allocator() : ext_case_(nullptr), sc_(nullptr), nruns_(-1), run_cases_(nullptr),
-                narenas_(-1), arenas_(nullptr), ok_(false), recovering(false) {
+  AllocatorDetail() : ext_case_(nullptr), sc_(nullptr), nruns_(-1), run_cases_(nullptr),
+                      narenas_(-1), arenas_(nullptr), ok_(false), recovering(false) {
     ext_case_ = new ExtentCase();
     sc_ = new SizeClass();
     size_t ncpus = ncpus_online();
@@ -302,17 +287,17 @@ class Allocator {
     }
   }
 
-  ~Allocator() {
-    builder().destroy(); // manually destroy the main thread cache
+  ~AllocatorDetail() {
+    for(auto accessor : tsd_) { delete accessor.second; }  // destroy thread local cache first
     std::destroy_n(arenas_, narenas_);  // return all used runs to their corresponding RunCase
     std::destroy_n(run_cases_, nruns_); // return all used extents to ExtentCase and persist for easy restart
     free(arenas_), free(run_cases_);
     delete sc_, delete ext_case_; // modify and persist allocator state code
   }
 
-  Allocator(const Allocator&) = delete;
+  AllocatorDetail(const AllocatorDetail&) = delete;
 
-  Allocator& operator=(const Allocator&) = delete;
+  AllocatorDetail& operator=(const AllocatorDetail&) = delete;
 
   /**
    * @brief create or open a persistent memory pool
@@ -334,7 +319,7 @@ class Allocator {
       if(rec) ok_ = false;
       if(ok_) { // reboot after normal shutdown/exit
         for(ExtentDesc* desc : extents) {
-          assert(desc->next() == nullptr);
+          assert((void*) desc->next() == nullptr);
           // It's unlikely that there are too many half-used extents
           switch(desc->type()) {
             case kSmall:
@@ -425,7 +410,7 @@ class Allocator {
   region_t acquire(size_t size) {
     // if !ok && !recovering, call recover for rebuild allocator and user defined data structure
     assert(ok_ == true || recovering == true);
-    ThreadCache& tcache = builder().locate();
+    ThreadCache& tcache = thread_cache();
     // specialized allocation during recovering, because rebuilder may do allocation
     return tcache.acquire(size, recovering);
   }
@@ -439,7 +424,7 @@ class Allocator {
   void release(void* ptr) {
     // if !ok && !recovering, call recover for rebuild allocator and user defined data structure
     assert(ok_ == true || recovering == true);
-    ThreadCache& tcache = builder().locate();
+    ThreadCache& tcache = thread_cache();
     // as for release, we need to check whether the upcoming free region is allocated during recovering phase
     tcache.release(ptr, recovering);
   }
@@ -448,9 +433,66 @@ class Allocator {
    * @brief the max usable size of region corresponding to ptr
    * */
   size_t region_size(void* ptr) {
-    ThreadCache& tcache = builder().locate();
+    ThreadCache& tcache = thread_cache();
     return tcache.region_size(ptr);
   }
+};
+
+
+class Allocator {
+  AllocatorDetail* alloc_;
+
+ public:
+  Allocator() : alloc_(nullptr) {
+    static std::mutex construct_lock;
+    static std::unordered_set<void*> allocs;
+
+    std::lock_guard guard(construct_lock);
+    std::vector<void*> discards;
+    alloc_ = (AllocatorDetail*) malloc(sizeof(AllocatorDetail));
+    while(allocs.find(alloc_) != allocs.end()) {
+      discards.push_back(alloc_);
+      alloc_ = (AllocatorDetail*) malloc(sizeof(AllocatorDetail));
+    }
+    for(auto ptr : discards) free(ptr);
+
+    new(alloc_) AllocatorDetail();
+    allocs.insert(alloc_);
+  }
+
+  Allocator(Allocator&& allocator) {
+    alloc_ = allocator.alloc_, allocator.alloc_ = nullptr;
+  }
+
+  Allocator& operator=(Allocator&& allocator) {
+    alloc_ = allocator.alloc_, allocator.alloc_ = nullptr;
+    return *this;
+  }
+
+  ~Allocator() {
+    if(alloc_ != nullptr) {
+      alloc_->~AllocatorDetail();
+      free(alloc_);
+    }
+  }
+
+  void open(const std::string& path, size_t size = -1, size_t nid = 0, bool rec = false) {
+    alloc_->open(path, size, nid, rec);
+  }
+
+  bool good() { return alloc_->good(); }
+
+  void recover(const std::function<void(region_t)>& rebuild, size_t nthd = 1, size_t nid = 0) {
+    alloc_->recover(rebuild, nthd, nid);
+  }
+
+  PersistRoot& root() { return alloc_->root(); }
+
+  region_t acquire(size_t size) { return alloc_->acquire(size); }
+
+  void release(void* ptr) { alloc_->release(ptr); }
+
+  size_t region_size(void* ptr) { return alloc_->region_size(ptr); }
 };
 
 }

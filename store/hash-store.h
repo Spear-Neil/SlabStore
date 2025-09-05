@@ -12,6 +12,7 @@
 #include <string>
 #include <array>
 #include <atomic>
+#include <unordered_set>
 
 #include "hash-table.h"
 #include "kv-type.h"
@@ -22,30 +23,123 @@ namespace SlabStore {
 using util::OptRowValue;
 using util::String;
 using util::Epoch;
+using util::DensePointer;
 using SlabStore::internal::hash_code;
 
 struct HashStoreConfig : DefaultHashConfig {
   static constexpr bool kInMemStore = false;
   static constexpr bool kOptUpdate = true;
   static constexpr bool kTimeStamp = true;
+
+  static constexpr size_t kNSlotInBucket = 48;
+  static constexpr size_t kNBucketInSegment = 64;
+
+  static constexpr size_t kReclaimTomb = 0x01ul << 30; // space threshold for reclaim tombstone, 1GB
 };
 
-template<typename K, size_t size = 256>
+template<typename K, typename StoreConfig = HashStoreConfig, size_t N = 256>
 class HashStore {
+  typedef SlabStore::HashTable<K, OptRowValue, StoreConfig> HashTable;
+  typedef typename HashTable::Segment Segment;
+  typedef typename HashTable::Bucket Bucket;
+
   Allocator slab_;
-  HashTable<K, OptRowValue, HashStoreConfig> index_;
+  HashTable index_;
+  std::atomic<size_t> tomb_size_;  // space occupied by tombstone
   std::atomic<uint64_t>* version_; // version table
+
+  static constexpr size_t kNSlot = StoreConfig::kNSlotInBucket;
+  static constexpr size_t kNBucket = StoreConfig::kNBucketInSegment;
+  static constexpr size_t kReclaimTomb = StoreConfig::kReclaimTomb;
+
+  // meta-information on persistent memory for fast reboot
+  struct PersistHead {
+    size_t depth; // global depth of hash table
+    size_t tomb_size; // space occupied by tombstone
+    pptr64_t dir; // directory of hash table
+    pptr64_t ver; // version table
+  };
+
+  // hash bucket residing on persistent memory for fast reboot
+  struct PersistBucket {
+    uint64_t bitmap: 48;
+    uint8_t depth;
+    uint8_t index;
+    uint8_t bucket_tags[kNSlot];
+    uint16_t slot_tags[kNSlot];
+    pptr64_t kvs[kNSlot];
+  };
 
  public:
   typedef util::KVPair<K, OptRowValue> KVPair;
 
-  HashStore() : slab_(), index_(), version_(nullptr) {
-    version_ = new std::atomic<uint64_t>[size]{};
-    for(size_t i = 0; i < size; i++) version_[i] = 0;
+  HashStore() : slab_(), index_(), tomb_size_(0), version_(nullptr) {
+    version_ = new std::atomic<uint64_t>[N]{};
+    for(size_t i = 0; i < N; i++) version_[i] = 0;
   }
 
   ~HashStore() {
-    // offload in-memory structure to persistent memory for fast reboot
+    // unload in-memory structure to persistent memory for fast reboot
+    auto head = slab_.acquire(sizeof(PersistHead));
+    auto pdir = slab_.acquire(sizeof(pptr64_t) * index_.directory_size());
+    auto pver = slab_.acquire(sizeof(uint64_t) * N);
+
+    bool reclaim = tomb_size_ > kReclaimTomb; // whether to reclaim tombstone
+    if(reclaim) tomb_size_ = 0;
+
+    auto ph = (PersistHead*) head.pointer();
+    ph->depth = index_.depth();
+    ph->tomb_size = tomb_size_;
+    ph->dir.store(pdir.pointer());
+    ph->ver.store(pver.pointer());
+    persist_write_back(ph, sizeof(PersistHead));
+    head.publish(false), pdir.publish(false), pver.publish(false);
+
+    slab_.root()[0].store(ph);
+    persist_write_back(&slab_.root()[0], sizeof(slab_.root()[0]));
+    memcpy(pver.pointer(), version_, sizeof(uint64_t) * N);
+    persist_write_back(pver.pointer(), sizeof(uint64_t) * N);
+
+    index_.get_epoch().clear(); // release all older kvs before reclaim tombstone
+    size_t count = index_.directory_size();
+
+    for(size_t sid = 0; sid < count; sid++) { // unload all segments
+      Segment* vsegment = index_.segment(sid);
+      size_t depth = vsegment->depth();
+
+      if(sid < (0x01ul << depth)) {
+        auto psegment = slab_.acquire(sizeof(PersistBucket) * kNBucket);
+
+        for(size_t bid = 0; bid < kNBucket; bid++) { // unload all buckets in a segment
+          auto& pb = ((PersistBucket*) psegment)[bid];
+          Bucket* vb = vsegment->bucket(bid);
+
+          pb.bitmap = vb->bitmap();
+          pb.depth = vb->depth();
+          pb.index = vb->index();
+          for(size_t tid = 0; tid < kNSlot; tid++) {
+            pb.bucket_tags[tid] = vb->tags(tid);
+            auto kv = vb->kvs(tid);
+            pb.slot_tags[tid] = kv.remain();
+            pb.kvs[tid].store(kv.pointer());
+
+            if(reclaim && (vb->bitmap() & (0x01ul << tid)) &&
+               ((KVPair*) kv.pointer())->tombstone()) { // reclaim tombstone
+              slab_.release(kv.pointer());
+              pb.bitmap &= ~(0x01ul << tid);
+            }
+          }
+        }
+
+        persist_write_back(psegment, sizeof(PersistBucket) * kNBucket);
+        psegment.publish(false);
+        ((pptr64_t*) pdir)[sid].store(psegment.pointer());
+      } else { // previously unloaded segment
+        size_t index = sid % (0x01ul << depth);
+        ((pptr64_t*) pdir)[sid].store(((pptr64_t*) pdir)[index].load());
+      }
+    }
+    wait_write_back(pdir, sizeof(pptr64_t) * index_.directory_size());
 
     delete[] version_;
   }
@@ -63,10 +157,25 @@ class HashStore {
     if(!slab_.good()) { // recover from power failure or system crashes
       slab_.recover([&](region_t obj) {
         if(obj.mode()) { // kv object
-          KVPair* res = index_.upsert((KVPair*) obj.pointer());
-          if(res == (KVPair*) internal::kNotFound) return; // insert the latest version at present
-          if(res == (KVPair*) internal::kExpired) { slab_.release(obj.pointer()); } // an expired version
-          else { index_.get_epoch().retire([&, res]() { slab_.release(res); }); } // update the latest
+          uint64_t code = hash_code(((KVPair*) obj.pointer())->key);
+          KVPair* res = index_.upsert((KVPair*) obj.pointer(), code);
+          if(((KVPair*) obj.pointer())->tombstone())
+            tomb_size_.fetch_add(slab_.region_size(obj));
+
+          if(res == (KVPair*) internal::kExpired) {
+            slab_.release(obj.pointer());
+            return;
+          } // an expired version
+
+          // insert/update the latest version
+          if(res != (KVPair*) internal::kNotFound) { // has an older version
+            index_.get_epoch().retire([&, res]() { slab_.release(res); });
+          }
+
+          // update version table
+          uint64_t latest = ((KVPair*) obj.pointer())->load_version();
+          uint64_t origin = version_[code % N].load(std::memory_order_acquire);
+          while(latest > origin && !version_[code % N].compare_exchange_strong(origin, latest));
         } else { // auxiliary structure for fast reboot, reclaim immediately
           slab_.release(obj.pointer());
         }
@@ -74,9 +183,60 @@ class HashStore {
     } else { // fast reboot from normal shutdown
       PersistRoot& root = slab_.root();
       if(root[0].load() != nullptr) {
+        auto head = (PersistHead*) root[0].load();
+        size_t count = 0x01ul << head->depth; // directory entry count
+        tomb_size_ = head->tomb_size;
+        auto pdir = (pptr64_t*) head->dir.load();
+        auto pver = (std::atomic<uint64_t>*) head->ver.load();
+        memcpy(version_, pver, sizeof(uint64_t) * N);
 
+        Segment** vdir = new Segment* [count]{};
+        DensePointer* kvs = new DensePointer[kNSlot]{};
+        uint8_t* tags = new uint8_t[kNSlot]{};
+
+        // reload all segments
+        for(size_t sid = 0; sid < count; sid++) {
+          auto psegment = (PersistBucket*) pdir[sid].load();
+          size_t depth = psegment->depth; // local depth
+
+          if(sid < (0x01ul << depth)) {
+            Segment* vsegment = new Segment(depth);
+
+            for(size_t bid = 0; bid < kNBucket; bid++) { // reload all buckets in a segment
+              PersistBucket& pb = psegment[bid];
+              Bucket* vb = vsegment->bucket(bid);
+              for(size_t tid = 0; tid < kNSlot; tid++) {
+                void* kv = pb.kvs[tid].load();
+                uint16_t tag = pb.slot_tags[tid];
+                kvs[tid] = DensePointer(kv, tag);
+              }
+              memcpy(tags, pb.bucket_tags, sizeof(uint8_t) * kNSlot);
+              new(vb) Bucket(pb.bitmap, pb.depth, pb.index, tags, kvs);
+            }
+
+            vdir[sid] = vsegment;
+          } else { vdir[sid] = vdir[sid % (0x01ul << depth)]; }
+        }
+
+        // release all persistent buckets
+        std::unordered_set<void*> released;
+        for(size_t sid = 0; sid < count; sid++) {
+          auto psegment = (PersistBucket*) pdir[sid].load();
+          if(released.find(psegment) != released.end()) {
+            slab_.release(psegment);
+            released.insert(psegment);
+          }
+        }
+
+        HashTable table(head->depth, vdir);
+        index_.swap(table);
+
+        delete[] tags, delete[] kvs, delete[] vdir;
+        slab_.release(pdir), slab_.release(pver), slab_.release(head);
       }
     }
+    slab_.root()[0].store(nullptr);
+    wait_write_back(&slab_.root()[0], sizeof(slab_.root()[0]));
   }
 
   /**
@@ -85,7 +245,7 @@ class HashStore {
    * */
   bool upsert(const K& key, void* value, int vlen) {
     uint64_t code = hash_code(key), kv_len = 0;
-    uint64_t version = version_[code % size]++;
+    uint64_t version = version_[code % N]++;
     if constexpr(std::is_same_v<K, String>) {
       kv_len = sizeof(KVPair) + key.len + vlen;
     } else { kv_len = sizeof(KVPair) + vlen; }
@@ -112,7 +272,7 @@ class HashStore {
    * */
   bool update(const K& key, void* value, int vlen) {
     uint64_t code = hash_code(key), kv_len = 0;
-    uint64_t version = version_[code % size]++;
+    uint64_t version = version_[code % N]++;
     if constexpr(std::is_same_v<K, String>) {
       kv_len = sizeof(KVPair) + key.len + vlen;
     } else { kv_len = sizeof(KVPair) + vlen; }
@@ -151,7 +311,7 @@ class HashStore {
    * */
   bool remove(const K& key) {
     uint64_t code = hash_code(key), kv_len = 0;
-    uint64_t version = version_[code % size]++;
+    uint64_t version = version_[code % N]++;
     if constexpr(std::is_same_v<K, String>) {
       kv_len = sizeof(KVPair) + key.len;
     } else { kv_len = sizeof(KVPair); }
@@ -159,6 +319,7 @@ class HashStore {
     // a previous old kv version may have not released into allocator by epoch-based reclaimer,
     // so we insert a tombstone for delete operation, and its space will be reclaimed during store closing
     auto kv = slab_.acquire(kv_len);
+    tomb_size_.fetch_add(slab_.region_size(kv));
     KVPair::make_kv((KVPair*) kv.pointer(), key, nullptr, 0);
     ((KVPair*) kv.pointer())->set_control(version, true); // tombstone
     wait_write_back(kv.pointer(), kv_len);
@@ -177,6 +338,11 @@ class HashStore {
     else { index_.get_epoch().retire([&, old]() { slab_.release(old); }); }
     return true;
   }
+
+  /**
+   * @brief number of kv pairs (including tombstone), thread-unsafe
+   * */
+  size_t size() { return index_.size(); }
 };
 
 }

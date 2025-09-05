@@ -26,6 +26,9 @@ class region_t {
 
   operator void*() const { return pointer(); }
 
+  template<typename T>
+  operator T*() const { return (T*) pointer(); }
+
   /**
    * @brief raw container of regions
    * */

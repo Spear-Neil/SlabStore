@@ -64,6 +64,9 @@ class pptr_t {
   }
 
   operator void*() const { return load(); }
+
+  template<typename T>
+  operator T*() const { return (T*) load(); }
 };
 
 }
