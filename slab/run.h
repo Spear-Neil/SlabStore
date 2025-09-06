@@ -260,7 +260,7 @@ class RunBin {
   void mrun_release(void* run, bool release, bool recover) {
     assert(type_ == kMedium);
     assert(!(!release && recover)); // half-used run can only inform normal bin
-    ext_case_->physical_space_reclaim(run, rsize_); // reclaim physical space first
+    if(release) ext_case_->physical_space_reclaim(run, rsize_); // reclaim physical space first
     size_t bid = recover ? 1 : 0;
     LockGuard guard(lock_);
     ExtentDesc* desc = ext_case_->descriptor(run);

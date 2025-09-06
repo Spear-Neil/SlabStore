@@ -12,7 +12,8 @@ int main() {
     String* key = (String*) malloc(sizeof(String) + 10);
     memcpy(key->str, "hello", 5);
     key->len = 5;
-    store0.upsert(*key, nullptr, 0);
+    bool ins = store0.upsert(*key, nullptr, 0);
+    std::cout << "store0 upsert: " << (ins ? "insert" : "update") << std::endl;
     assert(store0.lookup(*key));
     store0.update(*key, nullptr, 0);
     assert(store0.lookup(*key));
@@ -20,16 +21,17 @@ int main() {
     assert(!store0.lookup(*key));
   }
 
-/*  {
+  {
     HashStore<uint64_t> store1;
     store1.open("/home/sn/pmem/HashStore1");
-    store1.upsert(0, nullptr, 0);
+    bool ins = store1.upsert(0, nullptr, 0);
+    std::cout << "store1 upsert: " << (ins ? "insert" : "update") << std::endl;
     assert(store1.lookup(0));
     store1.update(0, nullptr, 0);
     assert(store1.lookup(0));
     store1.remove(0);
     assert(!store1.lookup(0));
-  }*/
+  }
 
   return 0;
 }

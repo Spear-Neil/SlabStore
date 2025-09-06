@@ -31,9 +31,6 @@ struct HashStoreConfig : DefaultHashConfig {
   static constexpr bool kOptUpdate = true;
   static constexpr bool kTimeStamp = true;
 
-  static constexpr size_t kNSlotInBucket = 48;
-  static constexpr size_t kNBucketInSegment = 64;
-
   static constexpr size_t kReclaimTomb = 0x01ul << 30; // space threshold for reclaim tombstone, 1GB
 };
 
@@ -119,7 +116,7 @@ class HashStore {
           pb.index = vb->index();
           for(size_t tid = 0; tid < kNSlot; tid++) {
             pb.bucket_tags[tid] = vb->tags(tid);
-            auto kv = vb->kvs(tid);
+            DensePointer kv = vb->kvs(tid);
             pb.slot_tags[tid] = kv.remain();
             pb.kvs[tid].store(kv.pointer());
 
@@ -301,6 +298,10 @@ class HashStore {
    * */
   KVPair* lookup(const K& key) {
     KVPair* kv = index_.lookup(key);
+
+    if(kv == (KVPair*) internal::kNotFound)
+      return (KVPair*) internal::kNotFound;
+
     if(!kv->tombstone()) return kv;
     return (KVPair*) internal::kNotFound;
   }
