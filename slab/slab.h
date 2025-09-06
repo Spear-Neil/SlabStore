@@ -303,12 +303,9 @@ class AllocatorDetail {
    * @brief create or open a persistent memory pool
    * @param path pool path
    * @param size pool size in bytes (device capacity by default)
-   * @param nid the start numa node id which the reload task is bound to
    * @param rec force to invoke recover to rebuild memory pool and user defined data structure
    * */
-  void open(const std::string& path, size_t size = -1, size_t nid = 0, bool rec = false) {
-    PinningMap pin;
-    pin.pinning_thread(nid, 0, pthread_self());
+  void open(const std::string& path, size_t size = -1, bool rec = false) {
     bool reboot;
     if(size == -1) { reboot = ext_case_->open(path); }
     else { reboot = ext_case_->open(path, size); }
@@ -476,8 +473,8 @@ class Allocator {
     }
   }
 
-  void open(const std::string& path, size_t size = -1, size_t nid = 0, bool rec = false) {
-    alloc_->open(path, size, nid, rec);
+  void open(const std::string& path, size_t size = -1, bool rec = false) {
+    alloc_->open(path, size, rec);
   }
 
   bool good() { return alloc_->good(); }

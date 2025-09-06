@@ -13,6 +13,7 @@
 #include <array>
 #include <atomic>
 #include <unordered_set>
+#include <iostream>
 
 #include "hash-table.h"
 #include "kv-type.h"
@@ -31,6 +32,7 @@ struct HashStoreConfig : DefaultHashConfig {
   static constexpr bool kOptUpdate = true;
   static constexpr bool kTimeStamp = true;
 
+  static constexpr bool kLogInfo = true;  // whether to print log information
   static constexpr size_t kReclaimTomb = 0x01ul << 30; // space threshold for reclaim tombstone, 1GB
 };
 
@@ -48,6 +50,7 @@ class HashStore {
   static constexpr size_t kNSlot = StoreConfig::kNSlotInBucket;
   static constexpr size_t kNBucket = StoreConfig::kNBucketInSegment;
   static constexpr size_t kReclaimTomb = StoreConfig::kReclaimTomb;
+  static constexpr bool kLogInfo = StoreConfig::kLogInfo;
 
   // meta-information on persistent memory for fast reboot
   struct PersistHead {
@@ -150,8 +153,9 @@ class HashStore {
    * @param nid numa node index to which recovery threads are pinned
    * */
   void open(const std::string& path, size_t nthd = 1, size_t nid = 0) {
-    slab_.open(path, -1, nid);
+    slab_.open(path, -1);
     if(!slab_.good()) { // recover from power failure or system crashes
+      if(kLogInfo) std::cout << "[HashStore]: recover from abnormal crashes" << std::endl;
       slab_.recover([&](region_t obj) {
         if(obj.mode()) { // kv object
           uint64_t code = hash_code(((KVPair*) obj.pointer())->key);
@@ -178,6 +182,7 @@ class HashStore {
         }
       }, nthd, nid);
     } else { // fast reboot from normal shutdown
+      if(kLogInfo) std::cout << "[HashStore]: fast reboot from normal shutdown" << std::endl;
       PersistRoot& root = slab_.root();
       if(root[0].load() != nullptr) {
         auto head = (PersistHead*) root[0].load();
