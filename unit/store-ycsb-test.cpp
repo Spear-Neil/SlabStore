@@ -14,7 +14,7 @@ using namespace SlabStore;
 constexpr size_t kValueLen = 32; // value length of each record
 constexpr size_t run_duration = 10; // run phase duration, second
 constexpr bool zipf = true; // requests distribution in run phase, zipfian/uniform
-constexpr size_t read_ratio = 50; // ratio of read operations in run phase
+constexpr size_t read_ratio = 100; // ratio of read operations in run phase
 
 constexpr bool crash = false; // abnormal termination
 
@@ -65,11 +65,7 @@ int main(int argc, char* argv[]) {
   bool exist = std::filesystem::exists(store_path);
 
   HashStore<String> store;
-  Timer timer;
-  timer.start();
   store.open(store_path, nrecover);
-  long drt = timer.duration_us();
-  std::cout << "[INFO]: open/recover elapsed time: " << drt << " microseconds" << std::endl;
 
   if(exist) {
     std::cout << "[INFO]: reboot/recovery verification ... " << std::flush;
@@ -84,6 +80,7 @@ int main(int argc, char* argv[]) {
     std::cout << "end, all records exist: " << GRAPH_FONT_RED <<
               (find_all ? "yes" : "no") << GRAPH_ATTR_NONE << std::endl;
   }
+  std::cout << "[INFO]: number of records: " << store.size() << std::endl;
 
   std::vector<std::thread> workers;
   std::vector<double> throughput(nworker);

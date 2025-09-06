@@ -15,12 +15,14 @@
 #include <unordered_set>
 #include <iostream>
 
+#include "timer.h"
 #include "hash-table.h"
 #include "kv-type.h"
 #include "../slab/slab.h"
 
 namespace SlabStore {
 
+using util::Timer;
 using util::OptRowValue;
 using util::String;
 using util::Epoch;
@@ -153,9 +155,14 @@ class HashStore {
    * @param nid numa node index to which recovery threads are pinned
    * */
   void open(const std::string& path, size_t nthd = 1, size_t nid = 0) {
+    Timer timer;
+    timer.start();
     slab_.open(path, -1);
+    long drt = timer.duration_us();
+    if(kLogInfo) std::cout << "[HashStore]: slab allocator open elapsed time: " << drt << " microseconds" << std::endl;
     if(!slab_.good()) { // recover from power failure or system crashes
       if(kLogInfo) std::cout << "[HashStore]: recover from abnormal crashes" << std::endl;
+      timer.start();
       slab_.recover([&](region_t obj) {
         if(obj.mode()) { // kv object
           uint64_t code = hash_code(((KVPair*) obj.pointer())->key);
@@ -181,8 +188,15 @@ class HashStore {
           slab_.release(obj.pointer());
         }
       }, nthd, nid);
+      long rdrt = timer.duration_us();
+      if(kLogInfo) {
+        std::cout << "[HashStore]: recover elapsed time: " << rdrt << " microseconds" << std::endl;
+        std::cout << "[HashStore]: total open/recover elapsed time: " << drt + rdrt << " microseconds" << std::endl;
+      }
     } else { // fast reboot from normal shutdown
       if(kLogInfo) std::cout << "[HashStore]: fast reboot from normal shutdown" << std::endl;
+      Timer timer;
+      timer.start();
       PersistRoot& root = slab_.root();
       if(root[0].load() != nullptr) {
         auto head = (PersistHead*) root[0].load();
@@ -235,6 +249,11 @@ class HashStore {
 
         delete[] tags, delete[] kvs, delete[] vdir;
         slab_.release(pdir), slab_.release(pver), slab_.release(head);
+      }
+      long rdrt = timer.duration_us();
+      if(kLogInfo) {
+        std::cout << "[HashStore]: reboot elapsed time: " << rdrt << " microseconds" << std::endl;
+        std::cout << "[HashStore]: total open/recover elapsed time: " << drt + rdrt << " microseconds" << std::endl;
       }
     }
     slab_.root()[0].store(nullptr);

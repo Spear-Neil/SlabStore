@@ -16,7 +16,7 @@
 #include <thread>
 #include <mutex>
 #include <unordered_set>
-#include <tbb/concurrent_hash_map.h>
+#include <tbb/concurrent_unordered_map.h>
 
 #include "const.h"
 #include "extent.h"
@@ -44,7 +44,7 @@ class AllocatorDetail {
   bool ok_;              // allocator state (whether the allocator is ok for allocation)
   bool recovering;       // in the process of rebuilding allocator metadata and user-defined data structure
 
-  typedef tbb::concurrent_hash_map<std::thread::id, ThreadCache*> tsd_t;
+  typedef tbb::concurrent_unordered_map<std::thread::id, ThreadCache*, std::hash<std::thread::id>> tsd_t;
   tsd_t tsd_; // thread specific data
 
   static constexpr size_t kCorePerArena = SlabConst::kCorePerArena;
@@ -84,14 +84,12 @@ class AllocatorDetail {
       local.alloc = this;
 
       auto tid = std::this_thread::get_id();
-      tsd_t::const_accessor accessor;
-      bool found = tsd_.find(accessor, tid);
-      if(!found) { // lazily create thread local cache
+      auto it = tsd_.find(tid);
+      if(it == tsd_.end()) { // lazily create thread local cache
         Arena* arena = this->choose_arena();
         local.tlc = new ThreadCache(ext_case_, sc_, run_cases_, arenas_, arena);
-        bool ins = tsd_.insert(accessor, {tid, local.tlc});
-        assert(ins == true);
-      } else { local.tlc = accessor->second; }
+        tsd_.insert({tid, local.tlc});
+      } else { local.tlc = it->second; }
     }
 
     return *local.tlc;
