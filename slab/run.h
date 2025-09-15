@@ -55,13 +55,14 @@ class RunBin {
    * @brief select an extent from the RunBin or if the RunBin is empty, acquire a new extent
    * @param recover do allocation from recovering bin
    * */
-  iterator select_ext(bool recover) {
+  std::pair<iterator, bool> select_ext(bool recover) {
     size_t bid = recover ? 1 : 0;
+    bool alloc = false;
     if(bins_[bid].empty()) {
       auto [desc, ext] = ext_case_->acquire(type_, rcase_, rsize_, recover);
-      if(ext) bins_[bid].insert({ext, desc}); // make sure get a valid extent
+      if(ext) alloc = true, bins_[bid].insert({ext, desc}); // make sure get a valid extent
     }
-    return bins_[bid].begin();
+    return {bins_[bid].begin(), alloc};
   }
 
   /**
@@ -172,21 +173,31 @@ class RunBin {
   srun_t srun_acquire(size_t arena, size_t size, bool recover) {
     assert(type_ == kSmall && size <= kMaxSmallSize);
     size_t bid = recover ? 1 : 0;
-    LockGuard guard(lock_);
-    auto it = select_ext(recover);
-    if(it == bins_[bid].end()) return {nullptr, nullptr}; // no more space
+    iterator it;
+    bool alloc = false;
+    void* ext = nullptr, * run = nullptr;
+    ExtentDesc* desc = nullptr;
 
-    auto [ext, desc] = *it;
-    assert(desc->type() == kSmall);
-    size_t rid = desc->locate_fsrun();
-    assert(rid < desc->count()); // ext should not be fully allocated
+    {
+      LockGuard guard(lock_);
+      std::tie(it, alloc) = select_ext(recover);
+      if(it == bins_[bid].end()) return {nullptr, nullptr}; // no more space
 
-    void* run = (void*) ((uintptr_t) ext + rid * rsize_);
-    size_t count = small_region_count(size);
-    ((SmallMeta*) run)->construct(arena, size, count);
-    desc->palloc_srun(rid); // failure atomic
-    // check whether there are any free small runs
-    if(desc->locate_fsrun(rid) == desc->count()) bins_[bid].erase(it);
+      std::tie(ext, desc) = *it;
+      assert(desc->type() == kSmall);
+      size_t rid = desc->locate_fsrun();
+      assert(rid < desc->count()); // ext should not be fully allocated
+
+      run = (void*) ((uintptr_t) ext + rid * rsize_);
+      size_t count = small_region_count(size);
+      ((SmallMeta*) run)->construct(arena, size, count);
+      desc->palloc_srun(rid); // failure atomic
+      // check whether there are any free small runs
+      if(desc->locate_fsrun(rid) == desc->count()) bins_[bid].erase(it);
+    }
+
+    // physical page pre-allocation, time-consuming, leave it out of the lock scope
+    if(alloc) ext_case_->physical_space_alloc(ext, kExtentSize);
 
     return {(SmallMeta*) run, run};
   }
@@ -202,24 +213,32 @@ class RunBin {
     assert(type_ == kMedium);
     assert(size > kMaxSmallSize && size <= kMaxMediumSize);
     size_t bid = recover ? 1 : 0;
-    LockGuard guard(lock_);
-    auto it = select_ext(recover);
-    if(it == bins_[bid].end()) return {nullptr, nullptr}; // no more space
+    iterator it;
+    bool alloc = false;
+    void* run = nullptr;
+    MediumMeta* meta = nullptr;
 
-    auto [ext, desc] = *it;
-    assert(desc->type() == kMedium);
-    size_t rid = desc->locate_fmrun();
-    assert(rid < desc->count());// ext should not be fully allocated
+    {
+      LockGuard guard(lock_);
+      std::tie(it, alloc) = select_ext(recover);
+      if(it == bins_[bid].end()) return {nullptr, nullptr}; // no more space
 
-    auto* meta = (MediumMeta*) desc->runs() + rid;
-    void* run = (void*) ((uintptr_t) ext + rid * rsize_);
-    size_t count = medium_region_count(size);
-    meta->construct(arena, size, count);
-    desc->palloc_mrun(rid);  // failure atomic
-    // check whether there are any free medium runs
-    if(desc->locate_fmrun(rid) == desc->count()) bins_[bid].erase(it);
+      auto [ext, desc] = *it;
+      assert(desc->type() == kMedium);
+      size_t rid = desc->locate_fmrun();
+      assert(rid < desc->count());// ext should not be fully allocated
 
-    ext_case_->physical_space_alloc(run, rsize_); // physical page pre-allocation
+      meta = (MediumMeta*) desc->runs() + rid;
+      run = (void*) ((uintptr_t) ext + rid * rsize_);
+      size_t count = medium_region_count(size);
+      meta->construct(arena, size, count);
+      desc->palloc_mrun(rid);  // failure atomic
+      // check whether there are any free medium runs
+      if(desc->locate_fmrun(rid) == desc->count()) bins_[bid].erase(it);
+    }
+
+    // physical page pre-allocation, time-consuming, for each run
+    ext_case_->physical_space_alloc(run, rsize_);
     return {meta, run};
   }
 
@@ -260,7 +279,6 @@ class RunBin {
   void mrun_release(void* run, bool release, bool recover) {
     assert(type_ == kMedium);
     assert(!(!release && recover)); // half-used run can only inform normal bin
-    if(release) ext_case_->physical_space_reclaim(run, rsize_); // reclaim physical space first
     size_t bid = recover ? 1 : 0;
     LockGuard guard(lock_);
     ExtentDesc* desc = ext_case_->descriptor(run);
@@ -386,7 +404,6 @@ class LargeBin {
     size_t ind = ((uintptr_t) ptr - (uintptr_t) ext) / desc->size(); // region index
     assert(ind < desc->count());
     desc->token(ind)->fire();  // persistently mark this region as free
-    ext_case_->physical_space_reclaim(ptr, desc->size()); // reclaim physical space
 
     bool free_ext = false;
     {

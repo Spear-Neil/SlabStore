@@ -219,7 +219,6 @@ class ExtentCase {
     void* ext = nullptr; // if no more space
     if(desc) ext = extent_.locate(index);
     if(recover) recs_.insert(desc); // record extents allocated during recovering
-    if(type == kSmall && desc) physical_space_alloc(ext, kExtentSize); // physical page pre-allocation
     return {desc, ext};
   }
 
@@ -232,9 +231,8 @@ class ExtentCase {
     assert(size_t(ext) % kExtentSize == 0);
     assert(descriptor(ext) == desc);
 
-    // reclaim physical space first for kSmall extents
-    if(desc->type() == kSmall)
-      physical_space_reclaim(ext, kExtentSize);
+    // reclaim physical space first
+    physical_space_reclaim(ext, kExtentSize);
     LockGuard guard(lock_);
     meta_.head().release(desc);
   }

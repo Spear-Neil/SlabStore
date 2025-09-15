@@ -59,6 +59,7 @@ class alignas(kPageSize) MetaHead {
   // for all extents of different Run size with a cost of some space wasting
   static constexpr size_t kNBaseExtent = kExtentSize / kMedRunBase;
 
+ public:
   typedef std::pair<ExtentDesc*, size_t> extent_id; // <descriptor, index of descriptor/extent>
 
  private:
@@ -72,7 +73,7 @@ class alignas(kPageSize) MetaHead {
     assert(mind < 2 && mind != mind_);
     DescMeta& meta = meta_[mind];
     // allocate from reclaimed/free list
-    if(meta.med_free != nullptr) {
+    if((void*) meta.med_free != nullptr) {
       auto runs = (MediumMeta*) meta.med_free.load();
       assert(runs - (MediumMeta*) med_meta_.load() < med_total_);
       // only update head meta and don't update runs.next
@@ -93,7 +94,7 @@ class alignas(kPageSize) MetaHead {
    * @return descriptor (initialized) and index of the descriptor/extent
    * */
   extent_id complex_reclaim(RegionType type, size_t run_case, size_t size) {
-    assert(type == kMedium && meta_[mind_].ext_free != nullptr);
+    assert(type == kMedium && (void*) meta_[mind_].ext_free != nullptr);
     size_t oid = mind_, nid = (mind_ + 1) % 2;
 
     meta_[nid] = meta_[oid];  // copy meta and then update
@@ -120,7 +121,7 @@ class alignas(kPageSize) MetaHead {
    * @return descriptor (initialized) and index of the descriptor/extent
    * */
   extent_id plain_reclaim(RegionType type, size_t run_case, size_t size) {
-    assert(type == kSmall || type == kLarge && meta_[mind_].ext_free != nullptr);
+    assert(type == kSmall || type == kLarge && (void*) meta_[mind_].ext_free != nullptr);
     DescMeta& meta = meta_[mind_];
     auto desc = (ExtentDesc*) meta.ext_free.load();
     void* next = desc->next();
@@ -143,7 +144,7 @@ class alignas(kPageSize) MetaHead {
    * */
   extent_id reclaim(RegionType type, size_t run_case, size_t size) {
     // no more free extent
-    if(meta_[mind_].ext_free == nullptr) { return {nullptr, 0}; }
+    if((void*) meta_[mind_].ext_free == nullptr) { return {nullptr, 0}; }
     if(type == kMedium) {
       // allocate extent for medium allocation request from reclaimed list
       return complex_reclaim(type, run_case, size);
@@ -185,7 +186,7 @@ class alignas(kPageSize) MetaHead {
   extent_id plain_allocate(RegionType type, size_t run_case, size_t size) {
     assert(type == kSmall || type == kLarge);
     DescMeta& meta = meta_[mind_];
-    assert(meta.ext_free == nullptr && meta.ext_used < ext_total_);
+    assert((void*) meta.ext_free == nullptr && meta.ext_used < ext_total_);
     size_t index = meta.ext_used;
     auto desc = (ExtentDesc*) ext_desc_.load() + index;
     desc->construct(type, run_case, size, nullptr, nullptr, true);
@@ -333,7 +334,7 @@ class alignas(kPageSize) MetaHead {
       desc->next() = nullptr;  // it can be left out
       persist_write_back(desc, sizeof(ExtentDesc));
     }
-    if(occupied_ != nullptr) {
+    if((void*) occupied_ != nullptr) {
       occupied_ = nullptr;
       persist_write_back(this, kCacheLineSize);
     }
