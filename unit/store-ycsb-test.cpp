@@ -12,7 +12,7 @@ using namespace util;
 using namespace SlabStore;
 
 constexpr size_t kValueLen = 32; // value length of each record
-constexpr size_t run_duration = 10; // run phase duration, second
+constexpr size_t run_duration = 30; // run phase duration, second
 constexpr bool zipf = true; // requests distribution in run phase, zipfian/uniform
 constexpr size_t read_ratio = 100; // ratio of read operations in run phase
 
@@ -42,9 +42,12 @@ int main(int argc, char* argv[]) {
 
   PinningMap pin;
   pin.pinning_thread(0, 0, pthread_self());
+  if(nworker < pin.processor_number() / pin.numa_number()) {
+    pin.set_numa_policy(false);
+  } else { pin.set_numa_policy(true); }
 
-  std::ifstream loads(load_path);
-  if(!loads.good()) {
+  std::ifstream fin(load_path);
+  if(!fin.good()) {
     std::cerr << "[ERROR]: failed to open " << load_path << std::endl;
     exit(EXIT_FAILURE);
   }
@@ -53,13 +56,14 @@ int main(int argc, char* argv[]) {
   std::vector<String*> requests;
   requests.reserve(1000000);
   std::string raw_req;
-  while(std::getline(loads, raw_req)) {
+  while(std::getline(fin, raw_req)) {
     auto&& row = string_split(std::move(raw_req), ' ');
     assert(row.size() == 2 && row[0] == "INSERT");
     std::string& key = row.back();
     auto req = String::make_string(key.data(), key.size());
     requests.push_back(req);
   }
+  std::shuffle(requests.begin(), requests.end(), std::mt19937_64());
   std::cout << "end, request count: " << requests.size() << std::endl;
 
   bool exist = std::filesystem::exists(store_path);
@@ -114,9 +118,9 @@ int main(int argc, char* argv[]) {
     workers.push_back(std::thread([&](size_t tid) {
       pin.pinning_thread_continuous(pthread_self());
       size_t opcnt = 0, rcnt = 0, wcnt = 0;
-      UnifGenerator<size_t> op_type(0, 100);
-      UnifGenerator<size_t> req_unif(0, requests.size());
-      ZipfGenerator<size_t> req_zipf(0, requests.size());
+      UnifGenerator<size_t> op_type(0, 100, hash(tid));
+      UnifGenerator<size_t> req_unif(0, requests.size(), hash(tid));
+      ZipfGenerator<size_t> req_zipf(0, requests.size(), hash(tid));
       Timer timer;
       timer.start();
 

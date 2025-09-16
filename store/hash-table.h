@@ -55,7 +55,7 @@ struct DefaultHashConfig {
 template<typename K>
 inline uint64_t hash_code(const K& key) {
   if constexpr(std::is_same<K, String>()) {
-    return hash((void*) key.str, key.len);
+    return hash(key.str, key.len);
   } else { return hash(key); }
 }
 
