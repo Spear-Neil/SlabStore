@@ -25,6 +25,8 @@ inline constexpr uint32_t kFileMode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_
 struct SlabConst {
   /* option of whether to print allocator state/help information */
   static constexpr bool kLogInfo = true;
+  /* whether to reclaim physical space */
+  static constexpr bool kPhyReclaim = false;
   /* processor number bound to a single arena */
   static constexpr size_t kCorePerArena = 2;
   /* processor number bound to a RunCase, reduce contention on run allocation */

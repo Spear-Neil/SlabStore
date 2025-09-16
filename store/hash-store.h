@@ -238,7 +238,7 @@ class HashStore {
         std::unordered_set<void*> released;
         for(size_t sid = 0; sid < count; sid++) {
           auto psegment = (PersistBucket*) pdir[sid].load();
-          if(released.find(psegment) != released.end()) {
+          if(released.find(psegment) == released.end()) {
             slab_.release(psegment);
             released.insert(psegment);
           }

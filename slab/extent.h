@@ -43,6 +43,7 @@ class ExtentCase {
   tbb::concurrent_unordered_set<ExtentDesc*> recs_; // extents allocated during recovering
 
   static constexpr bool kLogInfo = SlabConst::kLogInfo;
+  static constexpr bool kPhyReclaim = SlabConst::kPhyReclaim;
   static constexpr size_t kDefaultSize = -1;  // use capacity size of nvm device as pool size
   static constexpr size_t kExtentSize = SlabConst::kExtentSize;
   static constexpr size_t kPoolSizeAlign = SlabConst::kPoolSizeAlign;
@@ -232,7 +233,7 @@ class ExtentCase {
     assert(descriptor(ext) == desc);
 
     // reclaim physical space first
-    physical_space_reclaim(ext, kExtentSize);
+    if(kPhyReclaim) physical_space_reclaim(ext, kExtentSize);
     LockGuard guard(lock_);
     meta_.head().release(desc);
   }
