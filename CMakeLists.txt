@@ -13,4 +13,5 @@ link_libraries(pthread numa jemalloc tbb)
 add_compile_options(-march=native) #-fopt-info-vec-optimized)
 
 add_subdirectory(unit)
+add_subdirectory(test)
 add_executable(SlabStore main.cpp)

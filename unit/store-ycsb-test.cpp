@@ -11,6 +11,7 @@
 using namespace util;
 using namespace SlabStore;
 
+constexpr size_t store_size = 1024 * 1024 * 1024 * 128ul;
 constexpr size_t kValueLen = 32; // value length of each record
 constexpr size_t run_duration = 30; // run phase duration, second
 constexpr bool zipf = true; // requests distribution in run phase, zipfian/uniform
@@ -69,7 +70,7 @@ int main(int argc, char* argv[]) {
   bool exist = std::filesystem::exists(store_path);
 
   HashStore<String> store;
-  store.open(store_path, nrecover);
+  store.open(store_path, store_size, nrecover);
 
   if(exist) {
     std::cout << "[INFO]: reboot/recovery verification ... " << std::flush;

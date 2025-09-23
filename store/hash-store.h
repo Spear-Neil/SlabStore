@@ -151,13 +151,14 @@ class HashStore {
   /**
    * @brief create a store or open an existing store (including recovery)
    * @param path store path
+   * @param size store size in bytes
    * @param nthd thread number used for recovery
    * @param nid numa node index to which recovery threads are pinned
    * */
-  void open(const std::string& path, size_t nthd = 1, size_t nid = 0) {
+  void open(const std::string& path, size_t size = -1, size_t nthd = 1, size_t nid = 0) {
     Timer timer;
     timer.start();
-    slab_.open(path, -1);
+    slab_.open(path, size);
     long drt = timer.duration_us();
     if(kLogInfo) std::cout << "[HashStore]: slab allocator open elapsed time: " << drt << " microseconds" << std::endl;
     if(!slab_.good()) { // recover from power failure or system crashes
