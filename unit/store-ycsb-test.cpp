@@ -7,6 +7,7 @@
 
 #include "util.h"
 #include "../store/hash-store.h"
+#include "cpucounters.h"
 
 using namespace util;
 using namespace SlabStore;
@@ -17,6 +18,7 @@ constexpr size_t run_duration = 30; // run phase duration, second
 constexpr bool zipf = true; // requests distribution in run phase, zipfian/uniform
 constexpr size_t read_ratio = 100; // ratio of read operations in run phase
 
+constexpr bool enable_pcm = true; // enable intel pcm
 constexpr bool crash = false; // abnormal termination
 
 static char common_value[1024]{"Large main memory capacity and even larger data sets have moti\n"
@@ -113,8 +115,18 @@ int main(int argc, char* argv[]) {
   }
   std::cout << "[INFO]: load phase throughput: " << total_tpt << std::endl;
 
+  pcm::PCM* pcm = nullptr;
+  pcm::SystemCounterState before, after;
+
   workers.clear(), total_tpt = 0;
   pin.reset_pinning_counter(0, 0);
+  if(enable_pcm) {
+    pcm = pcm::PCM::getInstance();
+    pcm->checkError(pcm->program());
+    before = pcm->getSystemCounterState();
+  }
+  Timer timer;
+  timer.start();
   for(size_t tid = 0; tid < nworker; tid++) {
     workers.push_back(std::thread([&](size_t tid) {
       pin.pinning_thread_continuous(pthread_self());
@@ -157,9 +169,27 @@ int main(int argc, char* argv[]) {
     workers[tid].join();
     total_tpt += throughput[tid];
   }
+  long drt = timer.duration_us();
+  if(enable_pcm) after = pcm->getSystemCounterState();
   std::cout << "[INFO]: run phase throughput: " << total_tpt << std::endl;
   std::cout << "[INFO]: number of records: " << store.size() << std::endl;
 
+  if(enable_pcm){
+    std::cout << "[INFO]: L3 Miss Ratio: " << 1 - pcm::getL3CacheHitRatio(before, after) << std::endl;
+
+    double mem_reads = (double) pcm::getBytesReadFromMC(before, after) / (0x01ul << 20);
+    double mem_writes = (double) pcm::getBytesWrittenToMC(before, after) / (0x01ul << 20);
+    std::cout << "[INFO]: Mem Reads: " << mem_reads << " MiB, " << mem_reads * 1000000 / drt << " MiB/S" << std::endl;
+    std::cout << "[INFO]: Mem Writes: " << mem_writes << " MiB, " << mem_writes * 1000000 / drt << " MiB/S" << std::endl;
+
+    double pmem_reads = (double) pcm::getBytesReadFromPMM(before, after) / (0x01ul << 20);
+    double pmem_writes = (double) pcm::getBytesWrittenToPMM(before, after) / (0x01ul << 20);
+    std::cout << "[INFO]: PMM Reads: " << pmem_reads << " MiB, " << pmem_reads * 1000000 / drt << " MiB/S" << std::endl;
+    std::cout << "[INFO]: PMM Writes: " << pmem_writes << " MiB, " << pmem_writes * 1000000 / drt << " MiB/S"
+              << std::endl;
+
+    pcm->cleanup();
+  }
   std::cout << "\n==============================================================\n" << std::endl;
 
   if(crash) exit(EXIT_FAILURE);
