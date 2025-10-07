@@ -174,13 +174,14 @@ int main(int argc, char* argv[]) {
   std::cout << "[INFO]: run phase throughput: " << total_tpt << std::endl;
   std::cout << "[INFO]: number of records: " << store.size() << std::endl;
 
-  if(enable_pcm){
+  if(enable_pcm) {
     std::cout << "[INFO]: L3 Miss Ratio: " << 1 - pcm::getL3CacheHitRatio(before, after) << std::endl;
 
     double mem_reads = (double) pcm::getBytesReadFromMC(before, after) / (0x01ul << 20);
     double mem_writes = (double) pcm::getBytesWrittenToMC(before, after) / (0x01ul << 20);
     std::cout << "[INFO]: Mem Reads: " << mem_reads << " MiB, " << mem_reads * 1000000 / drt << " MiB/S" << std::endl;
-    std::cout << "[INFO]: Mem Writes: " << mem_writes << " MiB, " << mem_writes * 1000000 / drt << " MiB/S" << std::endl;
+    std::cout << "[INFO]: Mem Writes: " << mem_writes << " MiB, " << mem_writes * 1000000 / drt << " MiB/S"
+              << std::endl;
 
     double pmem_reads = (double) pcm::getBytesReadFromPMM(before, after) / (0x01ul << 20);
     double pmem_writes = (double) pcm::getBytesWrittenToPMM(before, after) / (0x01ul << 20);

@@ -21,7 +21,7 @@
 
 constexpr size_t BUF_SIZE = 1024;
 
-enum STORE_TYPE { PMEMKV = 0, SLABKV, PLUSHKV, VIPERKV, ROCKSKV };
+enum STORE_TYPE { PMEMKV = 0, SLABKV, PLUSHKV, VIPERKV, ROCKSKV, DUMMYKV, NUM_KVSTORE };
 
 class KVStore {
  public:
@@ -111,10 +111,12 @@ class SlabKVStore : public KVStore {
   }
 
   void insert(std::string_view key, std::string_view value) override {
+    util::EpochGuard guard(db_->get_epoch(), 1);
     db_->upsert(kbuf(key), (void*) value.data(), value.length());
   }
 
   void update(std::string_view key, std::string_view value) override {
+    util::EpochGuard guard(db_->get_epoch(), 1);
     bool find = db_->update(kbuf(key), (void*) value.data(), value.length());
     if(!find) {
       std::cerr << "[ERROR]: SlabStore try to update an non-existent record" << std::endl;
@@ -123,6 +125,7 @@ class SlabKVStore : public KVStore {
   }
 
   bool lookup(std::string_view key, std::string& value) override {
+    util::EpochGuard guard(db_->get_epoch(), 1);
     DB::KVPair* kv = db_->lookup(kbuf(key));
     if(kv == nullptr) return false;
 
@@ -273,6 +276,23 @@ class RocksKVStore : public KVStore {
   }
 };
 
+class DummyKVStore : public KVStore {
+ public:
+  DummyKVStore() = default;
+
+  ~DummyKVStore() = default;
+
+  std::string store_type() override { return "DummyStore"; }
+
+  void open(const std::string& path, size_t size) override {};
+
+  void insert(std::string_view key, std::string_view value) override {};
+
+  void update(std::string_view key, std::string_view value) override {};
+
+  bool lookup(std::string_view key, std::string& value) override { return true; };
+};
+
 KVStore* get_store(STORE_TYPE type) {
   switch(type) {
     case PMEMKV:
@@ -285,6 +305,8 @@ KVStore* get_store(STORE_TYPE type) {
       return new ViperKVStore();
     case ROCKSKV:
       return new RocksKVStore();
+    case DUMMYKV:
+      return new DummyKVStore();
     default:
       std::cerr << "[ERROR]: unknown store type" << std::endl;
       exit(-1);
