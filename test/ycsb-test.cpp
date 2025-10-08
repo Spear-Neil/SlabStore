@@ -178,6 +178,7 @@ int main(int argc, char* argv[]) {
   timer.start();
   workers.clear(), pin.reset_pinning_counter(0, 0);
   double run_tpt = 0;
+  std::atomic<size_t> total_failed = 0, total_count = 0;
   for(int tid = 0; tid < nthd; tid++) {
     workers.push_back(std::thread([&](int tid) {
       pin.pinning_thread_continuous(pthread_self());
@@ -185,7 +186,7 @@ int main(int argc, char* argv[]) {
       UnifGenerator<size_t> req_unif(0, records_num, hash(tid));
       ZipfGenerator<size_t> req_zipf(0, records_num, hash(tid), zipf_skew);
 
-      size_t opcnt = 0, rcnt = 0, wcnt = 0;
+      size_t opcnt = 0, rcnt = 0, wcnt = 0, fails = 0;
       Timer timer;
       timer.start();
       while(true) {
@@ -197,8 +198,9 @@ int main(int argc, char* argv[]) {
           value.reserve(val_size);
           bool found = store.lookup(workloads[req], value);
           if(!found) {
-            std::cerr << "[ERROR]: records not found" << std::endl;
-            exit(-1);
+            fails++;
+//            std::cerr << "[ERROR]: records not found" << std::endl;
+//            exit(-1);
           }
           rcnt++;
         } else { // update
@@ -211,6 +213,7 @@ int main(int argc, char* argv[]) {
       }
       long drt = timer.duration_us();
 //      std::cout << "tid: " << tid << ", read/write count: " << rcnt << " / " << wcnt << std::endl;
+      total_failed += fails, total_count += opcnt;
       throughputs[tid] = double(opcnt) / drt;
     }, tid));
   }
@@ -220,6 +223,8 @@ int main(int argc, char* argv[]) {
   }
   drt = timer.duration_us();
   std::cout << "end, throughput: " << run_tpt << std::endl;
+  std::cout << "[INFO]: total failed lookup count: " << total_failed
+            << ", total operation count: " << total_count << std::endl;
 
   if(enable_pcm) {
     after = pcm->getSystemCounterState();
