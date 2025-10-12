@@ -10,7 +10,7 @@ store_path = "/mnt/pmem0/ycsb-store"
 store_size = 16
 key_size, val_size = 8, 8
 records_num = 1000000
-run_duration = 1
+run_duration = 5
 enable_pcm = 0
 
 # stores = ["pmemkv", "SlabStore", "Plush", "Viper", "RocksDB"]

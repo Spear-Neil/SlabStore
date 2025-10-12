@@ -66,6 +66,10 @@ int main(int argc, char* argv[]) {
     exit(-1);
   }
 
+  KVStore& store = *get_store(store_type);
+  store_size = store_size * (0x01ul << 30);
+  store.open(store_path, store_size);
+
   PinningMap pin;
   pin.pinning_thread(0, 0, pthread_self());
   if(nthd < pin.processor_number() / pin.numa_number()) {
@@ -73,7 +77,6 @@ int main(int argc, char* argv[]) {
   } else { pin.set_numa_policy(true); }
 
   std::vector<std::string>& workloads = *new std::vector<std::string>(records_num); // workload keys
-  KVStore& store = *get_store(store_type);
 
   printf("[INFO]: store path: %s, size: %zu GB, type: %s, worker thread number: %zu\n",
          store_path.data(), store_size, store.store_type().data(), nthd);
@@ -82,9 +85,6 @@ int main(int argc, char* argv[]) {
   printf("[INFO]: run duration: %zu, enable pcm: %i, request distribution: %s, zipf skew: %f\n",
          run_duration, enable_pcm, zipf_dis ? "zipf" : "unif", zipf_skew);
   fflush(stdout);
-
-  store_size = store_size * (0x01ul << 30);
-  store.open(store_path, store_size);
 
   Timer timer;
   timer.start();

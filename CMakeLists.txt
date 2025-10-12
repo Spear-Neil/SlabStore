@@ -13,7 +13,7 @@ endif ()
 add_subdirectory(pcm) # build libpcm.a
 
 link_libraries(pthread numa jemalloc tbb PCM_STATIC)
-add_compile_options(-march=native) #-fopt-info-vec-optimized)
+add_compile_options(-march=native) # -fno-omit-frame-pointer -fopt-info-vec-optimized)
 
 add_subdirectory(unit)
 add_subdirectory(test)

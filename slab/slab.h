@@ -471,6 +471,8 @@ class Allocator {
     }
   }
 
+  void* pointer() { return alloc_; } // raw pointer of allocator, only used in HashStore
+
   void open(const std::string& path, size_t size = -1, bool rec = false) {
     alloc_->open(path, size, rec);
   }

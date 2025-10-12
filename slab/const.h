@@ -58,17 +58,17 @@ struct SlabConst {
   /* number of size class groups */
   static constexpr size_t kNSizeGroup = kNSlabsCached / kNSlabsPerGrp;
   /* the capacity of cache bin in each size group */
-  static constexpr uint8_t kCacheBinCapTab[kNSizeGroup] = {128, 128, 64, 64, 32, 16, 16, 8, 8, 4};
+  static constexpr size_t kCacheBinCapTab[kNSizeGroup] = {128, 128, 64, 64, 32, 16, 16, 8, 8, 4};
   /* stock quantity of cache bin; if the cache bin is full, the regions in excess of stock quantity
    * will be purged into arena; if the cache bin is empty, restock regions from corresponding arena */
-  static constexpr uint8_t kCacheBinStockTab[kNSizeGroup] = {64, 64, 32, 32, 16, 8, 8, 4, 4, 2};
+  static constexpr size_t kCacheBinStockTab[kNSizeGroup] = {64, 64, 32, 32, 16, 8, 8, 4, 4, 2};
   /* the count of run types (different size), can't be modified */
   static constexpr size_t kRunTypeCount = 6;
   /* run size corresponding to each size group, can't be modified */
-  static constexpr uint32_t kRunSizeTab[kRunTypeCount] = {kSmallRunBase, kSmallRunBase * 2, kSmallRunBase * 4,
-                                                          kMediumRunBase, kMediumRunBase * 2, kMediumRunBase * 4};
+  static constexpr size_t kRunSizeTab[kRunTypeCount] = {kSmallRunBase, kSmallRunBase * 2, kSmallRunBase * 4,
+                                                        kMediumRunBase, kMediumRunBase * 2, kMediumRunBase * 4};
   /* cached slab size class index to RunBin index map, can't be modified */
-  static constexpr uint8_t kCBin2RBin[kNSizeGroup] = {0, 0, 1, 1, 2, 3, 3, 4, 4, 5};
+  static constexpr size_t kCBin2RBin[kNSizeGroup] = {0, 0, 1, 1, 2, 3, 3, 4, 4, 5};
 
   /* the upper limit number of extents held by each RunBin and LargeBin,
    * redundant free extents will be released to the global ExtentCase */

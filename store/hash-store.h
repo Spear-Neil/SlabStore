@@ -14,6 +14,8 @@
 #include <atomic>
 #include <unordered_set>
 #include <iostream>
+#include <array>
+#include <deque>
 
 #include "timer.h"
 #include "hash-table.h"
@@ -34,6 +36,10 @@ struct HashStoreConfig : DefaultHashConfig {
   static constexpr bool kOptUpdate = true;
   static constexpr bool kTimeStamp = true;
 
+  static constexpr bool kWriteOpt = true; // write-optimized update operation
+  static constexpr size_t kWrtOptMaxSize = 2048; // max record size in write-optimized update
+  static constexpr size_t kMaxLimboSize = 1024;  // max number of expired kv pairs in ThreadLimbo
+
   static constexpr bool kLogInfo = true;  // whether to print log information
   static constexpr size_t kReclaimTomb = 0x01ul << 30; // space threshold for reclaim tombstone, 1GB
 };
@@ -46,6 +52,7 @@ class HashStore {
 
   Allocator slab_;
   HashTable index_;
+  SizeClass* sc_;
   std::atomic<size_t> tomb_size_;  // space occupied by tombstone
   std::atomic<uint64_t>* version_; // version table
 
@@ -53,6 +60,13 @@ class HashStore {
   static constexpr size_t kNBucket = StoreConfig::kNBucketInSegment;
   static constexpr size_t kReclaimTomb = StoreConfig::kReclaimTomb;
   static constexpr bool kLogInfo = StoreConfig::kLogInfo;
+
+  static constexpr bool kWriteOpt = StoreConfig::kWriteOpt;
+  static constexpr size_t kWrtOptMaxSize = StoreConfig::kWrtOptMaxSize;
+  static constexpr size_t kMaxLimboSize = StoreConfig::kMaxLimboSize;
+  static constexpr size_t kLimboCount = SizeClass::size2index_compute(kWrtOptMaxSize) + 1;
+
+  static_assert(kWrtOptMaxSize == SizeClass::index2size_compute(kLimboCount - 1));
 
   // meta-information on persistent memory for fast reboot
   struct PersistHead {
@@ -72,15 +86,85 @@ class HashStore {
     pptr64_t kvs[kNSlot];
   };
 
+  // kv pairs whose version is expired but haven't been back released to allocator
+  class ThreadLimbo {
+    Allocator* slab_;
+    SizeClass* sc_;
+    std::array<std::deque<void*>, kLimboCount> lists_;
+
+   public:
+    ThreadLimbo(Allocator* slab, SizeClass* sc) : slab_(slab), sc_(sc) {}
+
+    ~ThreadLimbo() {
+      for(const auto& list : lists_) {
+        for(void* ptr : list) slab_->release(ptr);
+      }
+    }
+
+    // put expired objects into limbo lists or release it back to allocator
+    void release(void* ptr) {
+      assert(ptr != nullptr);
+      size_t len = slab_->region_size(ptr);
+      size_t ind = sc_->size2index(len);
+      if(ind < kLimboCount &&
+         lists_[ind].size() < kMaxLimboSize) {
+        lists_[ind].push_back(ptr);
+      } else { slab_->release(ptr); }
+    }
+
+    // acquire an expired object from limbo list
+    void* acquire(size_t size) {
+      size_t ind = sc_->size2index(size);
+      if(ind < kLimboCount && !lists_[ind].empty()) {
+        void* ptr = lists_[ind].front();
+        lists_[ind].pop_front();
+        return ptr;
+      } else { return nullptr; }
+    }
+  };
+
+  typedef tbb::concurrent_unordered_map<std::thread::id, ThreadLimbo*, std::hash<std::thread::id>> tsd_t;
+  tsd_t tsd_; // thread limbo lists
+
+  ThreadLimbo& thread_limbo() {
+    static thread_local struct {
+      void* pointer = nullptr; // raw pointer of allocator
+      ThreadLimbo* limbo = nullptr;
+    } local;
+
+    // switch between different stores
+    if(branch_unlikely(local.pointer != slab_.pointer())) {
+      local.pointer = slab_.pointer();
+
+      auto tid = std::this_thread::get_id();
+      auto it = tsd_.find(tid);
+      if(it == tsd_.end()) { // lazily create thread limbo list
+        local.limbo = new ThreadLimbo(&slab_, sc_);
+        tsd_.insert({tid, local.limbo});
+      } else { local.limbo = it->second; }
+    }
+
+    return *local.limbo;
+  }
+
+  bool same_cache_line(void* ptr, size_t len) {
+    ptrdiff_t line0 = (ptrdiff_t) ptr & ~(kCacheLineSize - 1);
+    ptrdiff_t line1 = ((ptrdiff_t) ptr + len) & ~(kCacheLineSize - 1);
+    return line0 == line1;
+  }
+
  public:
   typedef util::KVPair<K, OptRowValue> KVPair;
 
-  HashStore() : slab_(), index_(), tomb_size_(0), version_(nullptr) {
+  HashStore() : slab_(), index_(), sc_(nullptr), tomb_size_(0), version_(nullptr) {
+    if(kWriteOpt) sc_ = new SizeClass();
     version_ = new std::atomic<uint64_t>[N]{};
     for(size_t i = 0; i < N; i++) version_[i] = 0;
   }
 
   ~HashStore() {
+    // destroy thread local limbo list first
+    for(auto accessor : tsd_) { delete accessor.second; }
     // unload in-memory structure to persistent memory for fast reboot
     auto head = slab_.acquire(sizeof(PersistHead));
     auto pdir = slab_.acquire(sizeof(pptr64_t) * index_.directory_size());
@@ -144,6 +228,7 @@ class HashStore {
     wait_write_back(pdir, sizeof(pptr64_t) * index_.directory_size());
 
     delete[] version_;
+    if(kWriteOpt) delete sc_;
   }
 
   Epoch& get_epoch() { return index_.get_epoch(); }
@@ -166,10 +251,16 @@ class HashStore {
       timer.start();
       slab_.recover([&](region_t obj) {
         if(obj.mode()) { // kv object
-          uint64_t code = hash_code(((KVPair*) obj.pointer())->key);
-          KVPair* res = index_.upsert((KVPair*) obj.pointer(), code);
-          if(((KVPair*) obj.pointer())->tombstone())
-            tomb_size_.fetch_add(slab_.region_size(obj));
+          KVPair* kv = (KVPair*) obj.pointer();
+          if(kWriteOpt && kv->invalid()) {
+            slab_.release(kv); // invalid kv pairs
+            return;
+          }
+
+          uint64_t code = hash_code(kv->key);
+          KVPair* res = index_.upsert(kv, code);
+          if(kv->tombstone())
+            tomb_size_.fetch_add(slab_.region_size(kv));
 
           if(res == (KVPair*) internal::kExpired) {
             slab_.release(obj.pointer());
@@ -182,7 +273,7 @@ class HashStore {
           }
 
           // update version table
-          uint64_t latest = ((KVPair*) obj.pointer())->load_version();
+          uint64_t latest = kv->load_version();
           uint64_t origin = version_[code % N].load(std::memory_order_acquire);
           while(latest > origin && !version_[code % N].compare_exchange_strong(origin, latest));
         } else { // auxiliary structure for fast reboot, reclaim immediately
@@ -272,19 +363,34 @@ class HashStore {
       kv_len = sizeof(KVPair) + key.len + vlen;
     } else { kv_len = sizeof(KVPair) + vlen; }
 
-    auto kv = slab_.acquire(kv_len);
-    KVPair::make_kv((KVPair*) kv.pointer(), key, value, vlen);
-    ((KVPair*) kv.pointer())->set_control(version, false);
-    wait_write_back(kv.pointer(), kv_len);
-    kv.publish(true, 0, true);
+    KVPair* kv = nullptr;
+    if(kWriteOpt) kv = (KVPair*) thread_limbo().acquire(kv_len);
 
-    KVPair* old = index_.upsert((KVPair*) kv.pointer(), code);
+    if(kv != nullptr) { // write kv pair into expired object
+      bool same = same_cache_line(kv, kv_len);
+      kv->invalidate();  // invalid the expired object
+      if(!same) wait_write_back(kv, sizeof(KVPair));
+      KVPair::make_kv(kv, key, value, vlen);
+      if(!same) wait_write_back(kv, kv_len);
+      kv->set_control(version, false);
+      if(same) wait_write_back(kv, kv_len);
+      else wait_write_back(kv, sizeof(KVPair));
+    } else { // write kv pair into newly allocated object
+      auto obj = slab_.acquire(kv_len);
+      kv = (KVPair*) obj.pointer();
+      KVPair::make_kv(kv, key, value, vlen);
+      kv->set_control(version, false);
+      wait_write_back(kv, kv_len);
+      obj.publish(true, 0, true);
+    }
 
+    KVPair* old = index_.upsert(kv, code);
     if(old == (KVPair*) internal::kNotFound) return true; // insertion succeeds
+    if(old == (KVPair*) internal::kExpired) old = kv;
 
-    // no any other threads are referencing this, release immediately
-    if(old == (KVPair*) internal::kExpired) { slab_.release(kv.pointer()); }
-    else { index_.get_epoch().retire([&, old]() { slab_.release(old); }); }
+    if(!kWriteOpt) index_.get_epoch().retire([&, old]() { slab_.release(old); });
+    else index_.get_epoch().retire([&, old]() { thread_limbo().release(old); });
+
     return false; // update
   }
 
@@ -299,22 +405,40 @@ class HashStore {
       kv_len = sizeof(KVPair) + key.len + vlen;
     } else { kv_len = sizeof(KVPair) + vlen; }
 
-    auto kv = slab_.acquire(kv_len);
-    KVPair::make_kv((KVPair*) kv.pointer(), key, value, vlen);
-    ((KVPair*) kv.pointer())->set_control(version, false);
-    wait_write_back(kv.pointer(), kv_len);
-    kv.publish(true, 0, true);
+    KVPair* kv = nullptr;
+    if(kWriteOpt) kv = (KVPair*) thread_limbo().acquire(kv_len);
 
-    KVPair* old = index_.update((KVPair*) kv.pointer(), code);
-
-    if(old == (KVPair*) internal::kNotFound) { // try to update a nonexisting kv
-      slab_.release(kv.pointer());
-      return false;
+    if(kv != nullptr) { // write kv pair into expired object
+      bool same = same_cache_line(kv, kv_len);
+      kv->invalidate();  // invalid the expired object
+      if(!same) wait_write_back(kv, sizeof(KVPair));
+      KVPair::make_kv(kv, key, value, vlen);
+      if(!same) wait_write_back(kv, kv_len);
+      kv->set_control(version, false);
+      if(same) wait_write_back(kv, kv_len);
+      else wait_write_back(kv, sizeof(KVPair));
+    } else { // write kv pair into newly allocated object
+      auto obj = slab_.acquire(kv_len);
+      kv = (KVPair*) obj.pointer();
+      KVPair::make_kv(kv, key, value, vlen);
+      kv->set_control(version, false);
+      wait_write_back(kv, kv_len);
+      obj.publish(true, 0, true);
     }
 
+    KVPair* old = index_.update(kv, code);
+    if(old == (KVPair*) internal::kNotFound) { // try to update a nonexisting kv
+      // if crashed here, leads to an insertion (upsert)
+      // such case should be prevented by upper level concurrency control
+      if(!kWriteOpt) slab_.release(kv);
+      else thread_limbo().release(kv);
+      return false;
+    }
     // update succeed, but kv is expired
-    if(old == (KVPair*) internal::kExpired) { slab_.release(kv.pointer()); }
-    else { index_.get_epoch().retire([&, old]() { slab_.release(old); }); }
+    if(old == (KVPair*) internal::kExpired) old = kv;
+    if(!kWriteOpt) index_.get_epoch().retire([&, old]() { slab_.release(old); });
+    else index_.get_epoch().retire([&, old]() { thread_limbo().release(old); });
+
     return true;
   }
 
@@ -344,24 +468,39 @@ class HashStore {
 
     // a previous old kv version may have not released into allocator by epoch-based reclaimer,
     // so we insert a tombstone for delete operation, and its space will be reclaimed during store closing
-    auto kv = slab_.acquire(kv_len);
-    tomb_size_.fetch_add(slab_.region_size(kv));
-    KVPair::make_kv((KVPair*) kv.pointer(), key, nullptr, 0);
-    ((KVPair*) kv.pointer())->set_control(version, true); // tombstone
-    wait_write_back(kv.pointer(), kv_len);
-    kv.publish(true, 0, true);
-
-    KVPair* old = index_.upsert((KVPair*) kv.pointer(), code);
-
-    if(old == (KVPair*) internal::kNotFound) { // try to delete a non-existing kv
-      slab_.release(kv.pointer());
-      return false;
+    KVPair* kv = nullptr;
+    if(kWriteOpt) kv = (KVPair*) thread_limbo().acquire(kv_len);
+    if(kv != nullptr) {
+      bool same = same_cache_line(kv, kv_len);
+      kv->invalidate();  // invalid the expired object
+      if(!same) wait_write_back(kv, sizeof(KVPair));
+      KVPair::make_kv(kv, key, nullptr, 0);
+      if(!same) wait_write_back(kv, kv_len);
+      kv->set_control(version, false);
+      if(same) wait_write_back(kv, kv_len);
+      else wait_write_back(kv, sizeof(KVPair));
+    } else {
+      auto obj = slab_.acquire(kv_len);
+      kv = (KVPair*) obj.pointer();
+      tomb_size_.fetch_add(slab_.region_size(kv));
+      KVPair::make_kv(kv, key, nullptr, 0);
+      kv->set_control(version, true); // tombstone
+      wait_write_back(kv, kv_len);
+      obj.publish(true, 0, true);
     }
 
+    KVPair* old = index_.upsert(kv, code);
+    if(old == (KVPair*) internal::kNotFound) { // try to delete a non-existing kv
+      if(!kWriteOpt) slab_.release(kv);
+      else thread_limbo().release(kv);
+      return false;
+    }
     // note: if another thread's operation is update, it actually does insertion
     // cause logically the kv pair has deleted by current operation
-    if(old == (KVPair*) internal::kExpired) { slab_.release(kv.pointer()); }
-    else { index_.get_epoch().retire([&, old]() { slab_.release(old); }); }
+    if(old == (KVPair*) internal::kExpired) old = kv;
+    if(!kWriteOpt) index_.get_epoch().retire([&, old]() { slab_.release(old); });
+    else index_.get_epoch().retire([&, old]() { thread_limbo().release(old); });
+
     return true;
   }
 
