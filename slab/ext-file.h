@@ -72,6 +72,7 @@ class ExtentFile {
    */
 
   static constexpr bool kLogInfo = SlabConst::kLogInfo;
+  static constexpr bool kPreAlloc = SlabConst::kPreAlloc;
   static constexpr size_t kExtentSize = SlabConst::kExtentSize;
   static constexpr size_t kRootSegSize = sizeof(PersistRoot);
   static constexpr size_t kMaxAttempts = 2; // max times of attempts of mmap
@@ -149,8 +150,9 @@ class ExtentFile {
 
     fd_ = fs_file_open(path_.data());
     fs_file_resize(fd_, size_);
+    if(kPreAlloc) fs_space_alloc(fd_, 0, size_);
+    else fs_space_alloc(fd_, 0, kRootSegSize);
     mmap_vspace();
-    fs_space_alloc(fd_, 0, kRootSegSize);
     root().init();
   }
 

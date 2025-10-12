@@ -473,6 +473,7 @@ class MetaFile {
    * ------------------------------
    */
 
+  static constexpr bool kPreAlloc = SlabConst::kPreAlloc;
   static constexpr size_t kMetaHeadSize = sizeof(MetaHead);
   static constexpr size_t kExtDescSize = sizeof(ExtentDesc);
   static constexpr size_t kMedMetaSize = sizeof(MediumMeta);
@@ -536,6 +537,7 @@ class MetaFile {
 
     fd_ = fs_file_open(path_.data());
     fs_file_resize(fd_, size_);
+    if(kPreAlloc) fs_space_alloc(fd_, 0, kMetaHeadSize + ext_desc);
     mmap_vspace();
     void* ext_seg = (void*) ((uintptr_t) start_ + kMetaHeadSize);
     void* med_seg = (void*) ((uintptr_t) ext_seg + ext_desc);

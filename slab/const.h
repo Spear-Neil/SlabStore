@@ -27,6 +27,8 @@ struct SlabConst {
   static constexpr bool kLogInfo = true;
   /* whether to reclaim physical space */
   static constexpr bool kPhyReclaim = false;
+  /* whether to pre-alloc all physical spare during initialization  */
+  static constexpr bool kPreAlloc = true;
   /* processor number bound to a single arena */
   static constexpr size_t kCorePerArena = 2;
   /* processor number bound to a RunCase, reduce contention on run allocation */
