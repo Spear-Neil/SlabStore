@@ -25,9 +25,12 @@ inline constexpr uint32_t kFileMode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_
 struct SlabConst {
   /* option of whether to print allocator state/help information */
   static constexpr bool kLogInfo = true;
+  /* optimization for platforms that support eADR domain */
+  static constexpr bool kEnhancedADR = false;
   /* whether to reclaim physical space */
   static constexpr bool kPhyReclaim = false;
-  /* whether to pre-alloc all physical spare during initialization  */
+  /* whether to pre-alloc all physical spare during initialization
+   * turn off this option for better physical space footprint */
   static constexpr bool kPreAlloc = true;
   /* processor number bound to a single arena */
   static constexpr size_t kCorePerArena = 2;

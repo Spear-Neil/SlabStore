@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <atomic>
 
+#include "const.h"
 #include "persist.h"
 
 namespace SlabStore {
@@ -46,6 +47,8 @@ class token_t {
   static constexpr std::memory_order load_order = std::memory_order_relaxed;
   static constexpr std::memory_order store_order = std::memory_order_relaxed;
 
+  static constexpr bool kEnhancedADR = SlabConst::kEnhancedADR;
+
  public:
   token_t() = delete;
 
@@ -65,7 +68,8 @@ class token_t {
     assert(token_ == kFreeCode && tag <= kMarkBits);
     uint8_t user = (mode ? kModeBit : 0) | tag;
     token_ = kInuseBit | user;
-    if(persist) wait_write_back(this, sizeof(token_t));
+    if(kEnhancedADR) persist_wait_finish();
+    else if(persist) wait_write_back(this, sizeof(token_t));
   }
 
   /**
@@ -76,7 +80,8 @@ class token_t {
   void fire(bool persist = true) {
     if(token_ != kFreeCode) {
       token_.store(kFreeCode, store_order);
-      if(persist) wait_write_back(this, sizeof(token_t));
+      if(kEnhancedADR) persist_wait_finish();
+      else if(persist) wait_write_back(this, sizeof(token_t));
     }
   }
 

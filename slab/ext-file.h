@@ -153,6 +153,7 @@ class ExtentFile {
     if(kPreAlloc) fs_space_alloc(fd_, 0, size_);
     else fs_space_alloc(fd_, 0, kRootSegSize);
     mmap_vspace();
+    if(kPreAlloc) madvise(start_, size_, MADV_WILLNEED);
     root().init();
   }
 

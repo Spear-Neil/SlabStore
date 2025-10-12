@@ -539,6 +539,7 @@ class MetaFile {
     fs_file_resize(fd_, size_);
     if(kPreAlloc) fs_space_alloc(fd_, 0, kMetaHeadSize + ext_desc);
     mmap_vspace();
+    if(kPreAlloc) madvise(start_, size_, MADV_WILLNEED);
     void* ext_seg = (void*) ((uintptr_t) start_ + kMetaHeadSize);
     void* med_seg = (void*) ((uintptr_t) ext_seg + ext_desc);
     head().init(size, ext_seg, med_seg);

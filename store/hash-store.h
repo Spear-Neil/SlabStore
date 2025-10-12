@@ -61,6 +61,7 @@ class HashStore {
   static constexpr size_t kReclaimTomb = StoreConfig::kReclaimTomb;
   static constexpr bool kLogInfo = StoreConfig::kLogInfo;
 
+  static constexpr bool kEnhancedADR = SlabConst::kEnhancedADR;
   static constexpr bool kWriteOpt = StoreConfig::kWriteOpt;
   static constexpr size_t kWrtOptMaxSize = StoreConfig::kWrtOptMaxSize;
   static constexpr size_t kMaxLimboSize = StoreConfig::kMaxLimboSize;
@@ -368,11 +369,12 @@ class HashStore {
 
     if(kv != nullptr) { // write kv pair into expired object
       bool same = same_cache_line(kv, kv_len);
-      kv->invalidate();  // invalid the expired object
-      if(!same) wait_write_back(kv, sizeof(KVPair));
+      kv->invalidate();  // invalid the expired object, release memory order
+      if(!kEnhancedADR && !same) wait_write_back(kv, sizeof(KVPair));
       KVPair::make_kv(kv, key, value, vlen);
-      if(!same) wait_write_back(kv, kv_len);
+      if(!kEnhancedADR && !same) wait_write_back(kv, kv_len);
       kv->set_control(version, false);
+      // write back data into medium even on eADR-supported platforms
       if(same) wait_write_back(kv, kv_len);
       else wait_write_back(kv, sizeof(KVPair));
     } else { // write kv pair into newly allocated object
@@ -411,9 +413,9 @@ class HashStore {
     if(kv != nullptr) { // write kv pair into expired object
       bool same = same_cache_line(kv, kv_len);
       kv->invalidate();  // invalid the expired object
-      if(!same) wait_write_back(kv, sizeof(KVPair));
+      if(!kEnhancedADR && !same) wait_write_back(kv, sizeof(KVPair));
       KVPair::make_kv(kv, key, value, vlen);
-      if(!same) wait_write_back(kv, kv_len);
+      if(!kEnhancedADR && !same) wait_write_back(kv, kv_len);
       kv->set_control(version, false);
       if(same) wait_write_back(kv, kv_len);
       else wait_write_back(kv, sizeof(KVPair));
@@ -473,9 +475,9 @@ class HashStore {
     if(kv != nullptr) {
       bool same = same_cache_line(kv, kv_len);
       kv->invalidate();  // invalid the expired object
-      if(!same) wait_write_back(kv, sizeof(KVPair));
+      if(!kEnhancedADR && !same) wait_write_back(kv, sizeof(KVPair));
       KVPair::make_kv(kv, key, nullptr, 0);
-      if(!same) wait_write_back(kv, kv_len);
+      if(!kEnhancedADR && !same) wait_write_back(kv, kv_len);
       kv->set_control(version, false);
       if(same) wait_write_back(kv, kv_len);
       else wait_write_back(kv, sizeof(KVPair));
