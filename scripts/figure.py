@@ -7,16 +7,16 @@ import matplotlib.pyplot as plt
 # global parameters
 log_dir = "./logs/"
 store_path = "/mnt/pmem0/ycsb-store"
-store_size = 16
-key_size, val_size = 8, 8
-records_num = 1000000
-run_duration = 5
-enable_pcm = 0
+store_size = 128
+key_size, val_size = 8, 32
+records_num = 100000000
+run_duration = 60
+enable_pcm = 1
 
-# stores = ["pmemkv", "SlabStore", "Plush", "Viper", "RocksDB"]
-stores = ["pmemkv", "SlabStore"]
-colors = ['blue', 'red', 'orange', 'green', 'purple', 'steelblue', 'gray']
-markers = ["o", "d", "s", "^", "v", "X", "P"]
+stores = ["pmemkv", "BasicSlabStore", "SlabStore", "Plush", "Viper", "RocksDB"]
+# stores = ["pmemkv", "BasicSlabStore"]
+colors = ['blue', 'steelblue', 'red', 'orange', 'green', 'purple', 'gray']
+markers = ["o", "X", "d", "s", "^", "v", "P"]
 
 
 def remove_path(path):

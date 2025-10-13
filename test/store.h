@@ -21,7 +21,7 @@
 
 constexpr size_t BUF_SIZE = 1024;
 
-enum STORE_TYPE { PMEMKV = 0, SLABKV, PLUSHKV, VIPERKV, ROCKSKV, DUMMYKV, NUM_KVSTORE };
+enum STORE_TYPE { PMEMKV = 0, BASIC_SLABKV, SLABKV, PLUSHKV, VIPERKV, ROCKSKV, DUMMYKV, NUM_KVSTORE };
 
 class KVStore {
  public:
@@ -45,7 +45,7 @@ class PMemKVStore : public KVStore {
  public:
   PMemKVStore() = default;
 
-  ~PMemKVStore() = default;
+  ~PMemKVStore() override = default;
 
   std::string store_type() override { return "pmemkv"; }
 
@@ -84,6 +84,58 @@ class PMemKVStore : public KVStore {
   }
 };
 
+class BasicSlabKVStore : public KVStore {
+  struct BasicConfig : SlabStore::HashStoreConfig {
+    static constexpr bool kWriteOpt = false;
+  };
+
+  typedef SlabStore::HashStore<util::String, BasicConfig> DB;
+  DB* db_;
+
+ private:
+  util::String& kbuf(std::string_view key) {
+    static thread_local char buf[BUF_SIZE];
+    assert(key.length() + sizeof(util::String) <= sizeof(buf));
+    auto kbuf = (util::String*) buf;
+    kbuf->len = key.length();
+    memcpy(kbuf->str, key.data(), key.length());
+    return *kbuf;
+  }
+
+ public:
+  BasicSlabKVStore() : db_(new DB()) {}
+
+  ~BasicSlabKVStore() override { delete db_; }
+
+  std::string store_type() override { return "BasicSlabStore"; }
+
+  void open(const std::string& path, size_t size) override {
+    db_->open(path, size);
+  }
+
+  void insert(std::string_view key, std::string_view value) override {
+    util::EpochGuard guard(db_->get_epoch(), 1);
+    db_->upsert(kbuf(key), (void*) value.data(), value.length());
+  }
+
+  void update(std::string_view key, std::string_view value) override {
+    util::EpochGuard guard(db_->get_epoch(), 1);
+    bool find = db_->update(kbuf(key), (void*) value.data(), value.length());
+    if(!find) {
+      std::cerr << "[ERROR]: BasicSlabStore try to update an non-existent record" << std::endl;
+      exit(-1);
+    }
+  }
+
+  bool lookup(std::string_view key, std::string& value) override {
+    util::EpochGuard guard(db_->get_epoch(), 1);
+    DB::KVPair* kv = db_->lookup(kbuf(key));
+    if(kv == nullptr) return false;
+
+    value.assign(kv->kv + kv->key.len, kv->vlen);
+    return true;
+  }
+};
 
 class SlabKVStore : public KVStore {
   typedef SlabStore::HashStore<util::String> DB;
@@ -102,7 +154,7 @@ class SlabKVStore : public KVStore {
  public:
   SlabKVStore() : db_(new DB()) {}
 
-  ~SlabKVStore() { delete db_; }
+  ~SlabKVStore() override { delete db_; }
 
   std::string store_type() override { return "SlabStore"; }
 
@@ -142,7 +194,7 @@ class PlushKVStore : public KVStore {
  public:
   PlushKVStore() : db_(nullptr) {}
 
-  ~PlushKVStore() { delete db_; }
+  ~PlushKVStore() override { delete db_; }
 
   std::string store_type() override { return "Plush"; }
 
@@ -193,9 +245,9 @@ class ViperKVStore : public KVStore {
  public:
   ViperKVStore() = default;
 
-  ~ViperKVStore() = default;
+  ~ViperKVStore() override = default;
 
-  std::string store_type() { return "Viper"; }
+  std::string store_type() override { return "Viper"; }
 
   void open(const std::string& path, size_t size) override {
     viper::ViperConfig config{.enable_reclamation = true};
@@ -222,7 +274,7 @@ class RocksKVStore : public KVStore {
  public:
   RocksKVStore() : db_(nullptr) {}
 
-  ~RocksKVStore() { delete db_; }
+  ~RocksKVStore() override { delete db_; }
 
   std::string store_type() override { return "RocksDB"; }
 
@@ -280,7 +332,7 @@ class DummyKVStore : public KVStore {
  public:
   DummyKVStore() = default;
 
-  ~DummyKVStore() = default;
+  ~DummyKVStore() override = default;
 
   std::string store_type() override { return "DummyStore"; }
 
@@ -297,6 +349,8 @@ KVStore* get_store(STORE_TYPE type) {
   switch(type) {
     case PMEMKV:
       return new PMemKVStore();
+    case BASIC_SLABKV:
+      return new BasicSlabKVStore();
     case SLABKV:
       return new SlabKVStore();
     case PLUSHKV:
