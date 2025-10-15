@@ -10,7 +10,7 @@ include_directories(pmem-rocksdb/include)
 add_library(plush SHARED ./plush/src/hashtable/Hashtable.cpp)
 target_compile_options(plush PRIVATE -mavx512f -mavx512vl)
 
-#add_custom_target(rocksdb COMMAND make ROCKSDB_ON_DCPMM=1 shared_lib -j
+#add_custom_target(rocksdb COMMAND make ROCKSDB_ON_DCPMM=1 shared_lib -j 32
 #        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/test/pmem-rocksdb)
 
 include_directories(concurrentqueue)
