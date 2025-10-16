@@ -12,6 +12,8 @@
 #include <cstdlib>
 #include <cassert>
 #include <string>
+#include <vector>
+#include <thread>
 
 #include "const.h"
 #include "pptr.h"
@@ -153,7 +155,24 @@ class ExtentFile {
     if(kPreAlloc) fs_space_alloc(fd_, 0, size_);
     else fs_space_alloc(fd_, 0, kRootSegSize);
     mmap_vspace();
-    if(kPreAlloc) madvise(start_, size_, MADV_WILLNEED);
+    if(kPreAlloc) { // pre page fault
+      madvise(start_, size_, MADV_WILLNEED);
+      util::PinningMap pin;
+      std::vector<std::thread> workers;
+      size_t nthd = 2, npages = size_ / kPageSize;
+      for(int tid = 0; tid < nthd; tid++) {
+        workers.push_back(std::thread([&](int tid) {
+          pin.pinning_thread_continuous(pthread_self());
+          size_t start = tid * npages / nthd;
+          size_t end = (tid + 1) * npages / nthd;
+          for(size_t pid = start; pid < end; pid++) {
+            *((char*) start_ + pid * kPageSize) = 0;
+            persist_write_back((char*) start_ + pid * kPageSize, 1);
+          }
+        }, tid));
+      }
+      for(int tid = 0; tid < nthd; tid++) workers[tid].join();
+    }
     root().init();
   }
 
