@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 log_dir = "./logs/"
 store_path = "/mnt/pmem0/ycsb-store"
 store_size = 128
-key_size, val_size = 8, 32
 records_num = 100000000
 run_duration = 60
 enable_pcm = 1
@@ -38,7 +37,7 @@ def build_project():
         os.mkdir(log_dir)
 
 
-def figure_scalability():
+def figure_scalability(key_size, val_size):
     threads = [1, 2, 4, 8, 16, 24, 32, 40, 48]
     read_ratios = [100, 75, 50, 25, 0]
     workloads = ["Read-Only", "Read-Heavy", "Balanced", "Write-Heavy", "Write-Only"]
@@ -99,7 +98,8 @@ def figure_scalability():
                  rotation='vertical', fontsize=15)
     for cid in range(0, col):
         fig.text(horizontal_begin + cid * hor_step, 1.01, workloads[cid], va='center', ha='center', fontsize=15)
-    fig.savefig('scale-result.pdf', bbox_inches='tight')
+    fig_name = 'scale-result-' + str(key_size) + '-' + str(val_size) + '.pdf'
+    fig.savefig(fig_name, bbox_inches='tight')
     fig.show()
 
 
@@ -114,4 +114,5 @@ if __name__ == "__main__":
     plt.rcParams['ps.fonttype'] = 42
     plt.rcParams['font.weight'] = 'medium'
 
-    figure_scalability()
+    figure_scalability(8, 32)
+    figure_scalability(32, 200)
