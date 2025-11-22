@@ -478,18 +478,18 @@ class HashStore {
       if(!kEnhancedADR && !same) wait_write_back(kv, sizeof(KVPair));
       KVPair::make_kv(kv, key, nullptr, 0);
       if(!kEnhancedADR && !same) wait_write_back(kv, kv_len);
-      kv->set_control(version, false);
+      kv->set_control(version, true);  // tombstone
       if(same) wait_write_back(kv, kv_len);
       else wait_write_back(kv, sizeof(KVPair));
     } else {
       auto obj = slab_.acquire(kv_len);
       kv = (KVPair*) obj.pointer();
-      tomb_size_.fetch_add(slab_.region_size(kv));
       KVPair::make_kv(kv, key, nullptr, 0);
       kv->set_control(version, true); // tombstone
       wait_write_back(kv, kv_len);
       obj.publish(true, 0, true);
     }
+    tomb_size_.fetch_add(slab_.region_size(kv));
 
     KVPair* old = index_.upsert(kv, code);
     if(old == (KVPair*) internal::kNotFound) { // try to delete a non-existing kv
