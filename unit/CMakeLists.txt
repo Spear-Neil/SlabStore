@@ -1,5 +1,6 @@
 function(add_unit name files)
     add_executable(unit-${name} ${files})
+    target_include_directories(unit-${name} PRIVATE ${PROJECT_SOURCE_DIR}/pcm/src)
     message(STATUS "add unit-${name}")
 endfunction()
 

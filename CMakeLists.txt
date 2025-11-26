@@ -3,14 +3,13 @@ project(SlabStore)
 set(CMAKE_CXX_STANDARD 17)
 
 include_directories(util)
-include_directories(pcm/src)
 
 execute_process(COMMAND lscpu COMMAND grep sse2 OUTPUT_VARIABLE SSE2_ENABLE)
 if (NOT SSE2_ENABLE)
     message(SEND_ERROR "sse2 is not supported")
 endif ()
 
-add_subdirectory(pcm) # build libpcm.a
+add_subdirectory(pcm) # build libpcm.a(PCM_STATIC)
 
 link_libraries(pthread numa jemalloc tbb PCM_STATIC)
 add_compile_options(-march=native) # -fno-omit-frame-pointer -fopt-info-vec-optimized)
