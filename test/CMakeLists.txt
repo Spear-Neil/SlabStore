@@ -50,8 +50,10 @@ add_executable(PiBench ${PROJECT_SOURCE_DIR}/test/pibench/src/main.cpp)
 target_link_libraries(PiBench libpibench)
 ##################################### pibench #####################################
 
-add_library(utree SHARED libs/libutree.cpp)
-target_link_libraries(utree pmemobj pmem)
+##################################### utree #####################################
+add_library(pibench-utree SHARED libs/libutree.cpp)
+target_link_libraries(pibench-utree pmemobj pmem)
+##################################### utree #####################################
 
 ##################################### dash #####################################
 include(FetchContent)
@@ -79,16 +81,23 @@ FetchContent_Declare(
 )
 FetchContent_Populate(epoch_reclaimer)
 
-add_library(dash SHARED libs/libdash.cpp)
-add_dependencies(dash PMDK)
-target_compile_definitions(dash PRIVATE -DPMEM)
-target_link_libraries(dash pthread gflags pmemobj pmem)
-target_include_directories(dash PRIVATE ${PMDK_PREFIX}/src/PMDK/src/include)
+add_library(pibench-dash SHARED libs/libdash.cpp)
+add_dependencies(pibench-dash PMDK)
+target_compile_definitions(pibench-dash PRIVATE -DPMEM)
+target_link_libraries(pibench-dash pthread gflags pmemobj pmem)
+target_include_directories(pibench-dash PRIVATE ${PMDK_PREFIX}/src/PMDK/src/include)
 if (${CMAKE_BUILD_TYPE} STREQUAL "Debug")
-    target_link_directories(dash PRIVATE ${PMDK_PREFIX}/src/PMDK/src/debug)
+    target_link_directories(pibench-dash PRIVATE ${PMDK_PREFIX}/src/PMDK/src/debug)
 else ()
-    target_link_directories(dash PRIVATE ${PMDK_PREFIX}/src/PMDK/src/nondebug)
+    target_link_directories(pibench-dash PRIVATE ${PMDK_PREFIX}/src/PMDK/src/nondebug)
 endif ()
-target_include_directories(dash PRIVATE ${epoch_reclaimer_SOURCE_DIR})
-target_include_directories(dash PRIVATE ${PROJECT_SOURCE_DIR}/test/dash/src)
+target_include_directories(pibench-dash PRIVATE ${epoch_reclaimer_SOURCE_DIR})
+target_include_directories(pibench-dash PRIVATE ${PROJECT_SOURCE_DIR}/test/dash/src)
 ##################################### dash #####################################
+
+##################################### FAST+FAIR #####################################
+set(CMAKE_CXX_STANDARD 11)
+add_library(pibench-fastfair SHARED libs/libfastfair.cpp)
+target_include_directories(pibench-fastfair PRIVATE fast-fair/concurrent_pmdk/src)
+target_link_libraries(pibench-fastfair rt m pthread pmemobj)
+##################################### FAST+FAIR #####################################

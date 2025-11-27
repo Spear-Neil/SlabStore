@@ -22,3 +22,6 @@
 [submodule "test/dash"]
 	path = test/dash
 	url = https://gitee.com/spearNeil/dash.git
+[submodule "test/fast-fair"]
+	path = test/fast-fair
+	url = https://gitee.com/spearNeil/FAST_FAIR.git
