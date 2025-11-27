@@ -16,3 +16,9 @@
 [submodule "pcm"]
 	path = pcm
 	url = https://gitee.com/spearNeil/pcm.git
+[submodule "test/pibench"]
+	path = test/pibench
+	url = https://gitee.com/spearNeil/pibench.git
+[submodule "test/dash"]
+	path = test/dash
+	url = https://gitee.com/spearNeil/dash.git
