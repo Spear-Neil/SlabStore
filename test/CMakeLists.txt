@@ -1,3 +1,4 @@
+##################################### mytest #####################################
 set(CMAKE_CXX_STANDARD 20)
 
 add_library(plush SHARED ./plush/src/hashtable/Hashtable.cpp)
@@ -23,6 +24,7 @@ foreach (file ${test_files})
     get_filename_component(name ${file} NAME_WE)
     add_mytest(${name} ${file})
 endforeach ()
+##################################### mytest #####################################
 
 ##################################### pibench #####################################
 set(CMAKE_CXX_STANDARD 17)
@@ -79,7 +81,9 @@ FetchContent_Declare(
         GIT_REPOSITORY https://gitee.com/spearNeil/epoch-reclaimer.git
         GIT_TAG master
 )
+if (NOT epoch_reclaimer_POPULATED)
 FetchContent_Populate(epoch_reclaimer)
+endif ()
 
 add_library(pibench-dash SHARED libs/libdash.cpp)
 add_dependencies(pibench-dash PMDK)
@@ -101,3 +105,14 @@ add_library(pibench-fastfair SHARED libs/libfastfair.cpp)
 target_include_directories(pibench-fastfair PRIVATE fast-fair/concurrent_pmdk/src)
 target_link_libraries(pibench-fastfair rt m pthread pmemobj)
 ##################################### FAST+FAIR #####################################
+
+##################################### fptree #####################################
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_library(pibench-fptree SHARED libs/libfptree.cpp fptree/fptree.cpp)
+target_compile_options(pibench-fptree PRIVATE -march=native)
+target_compile_definitions(pibench-fptree PRIVATE -DPMEM)
+target_include_directories(pibench-fptree PRIVATE fptree)
+target_link_libraries(pibench-fptree pmemobj pmem jemalloc tbb pthread)
+##################################### fptree #####################################

@@ -25,3 +25,6 @@
 [submodule "test/fast-fair"]
 	path = test/fast-fair
 	url = https://gitee.com/spearNeil/FAST_FAIR.git
+[submodule "test/fptree"]
+	path = test/fptree
+	url = https://gitee.com/spearNeil/fptree.git
