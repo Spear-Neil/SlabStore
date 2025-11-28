@@ -9,7 +9,7 @@ target_compile_options(plush PRIVATE -mavx512f -mavx512vl)
 
 function(add_mytest name files)
     add_executable(test-${name} ${files})
-#    add_dependencies(test-${name} rocksdb)
+    #    add_dependencies(test-${name} rocksdb)
     target_compile_definitions(test-${name} PUBLIC -DON_DCPMM)
     target_include_directories(test-${name} PRIVATE concurrentqueue)
     target_include_directories(test-${name} PRIVATE ${PROJECT_SOURCE_DIR}/pcm/src)
@@ -82,7 +82,7 @@ FetchContent_Declare(
         GIT_TAG master
 )
 if (NOT epoch_reclaimer_POPULATED)
-FetchContent_Populate(epoch_reclaimer)
+    FetchContent_Populate(epoch_reclaimer)
 endif ()
 
 add_library(pibench-dash SHARED libs/libdash.cpp)
@@ -111,8 +111,23 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(pibench-fptree SHARED libs/libfptree.cpp fptree/fptree.cpp)
-target_compile_options(pibench-fptree PRIVATE -march=native)
+target_compile_options(pibench-fptree PRIVATE -march=native)# -fopt-info-vec-optimized)
 target_compile_definitions(pibench-fptree PRIVATE -DPMEM)
 target_include_directories(pibench-fptree PRIVATE fptree)
 target_link_libraries(pibench-fptree pmemobj pmem jemalloc tbb pthread)
 ##################################### fptree #####################################
+
+##################################### lbtree #####################################
+# unfortunately, it cannot work with PiBench, maybe caused by cpuid?
+set(CMAKE_CXX_STANDARD 11)
+
+set(liblbtree-src lbtree/lbtree-src/lbtree.cc lbtree/common/tree.cc
+        lbtree/common/mempool.cc lbtree/common/nvm-common.cc)
+add_library(liblbtree SHARED ${liblbtree-src})
+target_compile_options(liblbtree PUBLIC -mrtm -msse4.1 -mavx2)
+target_include_directories(liblbtree PUBLIC lbtree/common lbtree/lbtree-src)
+target_link_libraries(liblbtree pmem pthread)
+
+add_library(pibench-lbtree SHARED libs/liblbtree.cpp)
+target_link_libraries(pibench-lbtree liblbtree)
+##################################### lbtree #####################################

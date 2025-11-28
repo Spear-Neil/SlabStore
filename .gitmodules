@@ -28,3 +28,6 @@
 [submodule "test/fptree"]
 	path = test/fptree
 	url = https://gitee.com/spearNeil/fptree.git
+[submodule "test/lbtree"]
+	path = test/lbtree
+	url = https://gitee.com/spearNeil/lbtree.git
