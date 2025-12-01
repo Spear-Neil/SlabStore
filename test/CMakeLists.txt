@@ -118,7 +118,8 @@ target_link_libraries(pibench-fptree pmemobj pmem jemalloc tbb pthread)
 ##################################### fptree #####################################
 
 ##################################### lbtree #####################################
-# unfortunately, it cannot work with PiBench, maybe caused by cpuid?
+# unfortunately, it does not work, so weird, xbegin always return 0
+# but the test program works (unit-rtm-test)
 set(CMAKE_CXX_STANDARD 11)
 
 set(liblbtree-src lbtree/lbtree-src/lbtree.cc lbtree/common/tree.cc
@@ -131,3 +132,12 @@ target_link_libraries(liblbtree pmem pthread)
 add_library(pibench-lbtree SHARED libs/liblbtree.cpp)
 target_link_libraries(pibench-lbtree liblbtree)
 ##################################### lbtree #####################################
+
+set(CMAKE_CXX_STANDARD 20)
+add_library(pibench-slabstore SHARED libs/libslabstore.cpp)
+
+add_library(pibench-viper SHARED libs/libviper.cpp)
+target_include_directories(pibench-viper PRIVATE concurrentqueue)
+
+add_library(pibench-plush SHARED libs/libplush.cpp)
+target_link_libraries(pibench-plush plush)

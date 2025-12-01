@@ -9,7 +9,7 @@ class DashWrapper : public tree_api {
  public:
   DashWrapper() {
     const char* pool = "/mnt/pmem0/pibench/dash";
-    const size_t size = (0x01ul << 30) * 200;
+    const size_t size = (0x01ul << 30) * 100;
 
     // Step 1: create (if not exist) and open the pool
     bool file_exist = false;

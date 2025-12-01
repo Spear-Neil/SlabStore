@@ -8,7 +8,7 @@ class FastFairWrapper : public tree_api {
  public:
   FastFairWrapper() {
     const char* path = "/mnt/pmem0/pibench/fastfair";
-    const size_t size = (0x01ul << 30) * 200;
+    const size_t size = (0x01ul << 30) * 100;
 
     if(access(path, F_OK) != 0) {
       pop = pmemobj_create(path, "fast+fair", size, 0666);

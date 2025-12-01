@@ -985,7 +985,7 @@ void openPmemobjPool() {
   if(file_exists(pathname) != 0) {
     printf("create new one.\n");
     if((pop = pmemobj_create(pathname, POBJ_LAYOUT_NAME(btree),
-                             200ull * 1024 * 1024 * 1024, 0666)) ==
+                             100ull * 1024 * 1024 * 1024, 0666)) ==
        NULL) {
       perror("failed to create pool.\n");
       return;
@@ -1108,7 +1108,7 @@ bool btree::insert(entry_key_t key, char* right) {
       bool f;
       btree_search_pred(key, &f, (char**) &prev);
       if(!f) {
-        printf("error!!!!\n");
+//        printf("error!!!!\n");
         return false;
       }
     }

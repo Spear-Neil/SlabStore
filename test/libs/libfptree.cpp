@@ -7,7 +7,7 @@ class FPTreeWrapper : public tree_api {
  public:
   FPTreeWrapper() {
     const char* pool = "/mnt/pmem0/pibench/fptree";
-    const size_t size = (0x01ul << 30) * 200;
+    const size_t size = (0x01ul << 30) * 100;
     tree.pmemInit(pool, size);
   }
 
