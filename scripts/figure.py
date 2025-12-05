@@ -3,19 +3,12 @@ import os
 import re
 import shutil
 import matplotlib.pyplot as plt
+import numpy as np
+from click import pause
 
 # global parameters
 log_dir = "./logs/"
-store_path = "/mnt/pmem0/ycsb-store"
-store_size = 128
-records_num = 100000000
-run_duration = 60
-enable_pcm = 1
-
-stores = ["pmemkv", "BasicSlabStore", "SlabStore", "Plush", "Viper", "RocksDB"]
-# stores = ["pmemkv", "BasicSlabStore"]
-colors = ['blue', 'steelblue', 'red', 'orange', 'green', 'purple', 'gray']
-markers = ["o", "X", "d", "s", "^", "v", "P"]
+pm_script = "./pm-script.py"
 
 
 def remove_path(path):
@@ -37,7 +30,169 @@ def build_project():
         os.mkdir(log_dir)
 
 
+def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
+    operation_count = 200000000  # total operation count in run phase
+    additional_count = 1000000
+    latency_sampling = 0.01
+
+    threads = [1, 2, 4, 8, 16, 24, 32, 40, 48]
+    workloads = ["Insert", "Lookup", "Remove", "Mixed"]
+    insert_ratio = [1.0, 0, 0, 0.5]
+    lookup_ratio = [0, 1.0, 0, 0.5]
+    remove_ratio = [0, 0, 1.0, 0]
+    objects = ["SlabStore", "pmemkv", "Plush(fixed)", "Viper(fixed)", "Dash", "FAST+FAIR", "FPTree", "uTree"]
+    libs = ["slabstore", "pmemkv", "plush", "viper", "dash", "fastfair", "fptree", "utree"]
+    colors = ['red', 'blue', 'orange', 'green', 'purple', 'gray', 'steelblue', 'brown']
+    markers = ["d", "o", "s", "^", "v", "P", "X", "*"]
+
+    for wid in range(len(workloads)):  # workloads: core kvs operations
+        if workloads[wid] == "Insert":
+            record_count = additional_count
+        elif workloads[wid] == "Remove":
+            record_count = operation_count + additional_count
+        else:  # Lookup / Mixed
+            record_count = operation_count
+
+        assert len(objects) == len(libs)
+        for oid in range(len(objects)):  # indexes and stores
+            input_lib = "./build/test/libpibench-" + libs[oid] + ".so"
+            for nthd in threads:
+                pibench = ["./build/test/PiBench", input_lib, "-n", str(record_count), "-p",
+                           str(operation_count), "-i", str(insert_ratio[wid]), "-r", str(lookup_ratio[wid]), "-d",
+                           str(remove_ratio[wid]), "--latency_sampling", str(latency_sampling), "-t", str(nthd),
+                           "--script", str(pm_script)]
+                log_name = ('pibench-' + workloads[wid] + '-' + libs[oid] + '-' + str(nthd) + '.log')
+                log_path = os.path.join(log_dir, log_name)
+
+                if not os.path.exists(log_path):
+                    remove_path("/mnt/pmem0/pibench")
+                    os.mkdir("/mnt/pmem0/pibench")
+                    result = subprocess.run(pibench, capture_output=True, text=True).stdout
+                    with open(log_path, "w") as log:
+                        log.write(str(pibench) + "\n" + result)
+
+    # figure throughput
+    fig = plt.figure(figsize=(10, 7.5))
+    row, col = 2, 2
+    for rid in range(row):
+        for cid in range(col):
+            wid = rid * col + cid
+            plt.subplot(row, col, wid + 1)
+            for oid in range(len(objects)):  # indexes and stores
+                perf = []
+                for nthd in threads:
+                    log_name = ('pibench-' + workloads[wid] + '-' + libs[oid] + '-' + str(nthd) + '.log')
+                    log_path = os.path.join(log_dir, log_name)
+                    with open(log_path) as log:
+                        result = log.read()
+                        if not result:
+                            exit("Unknown error: " + log_path)
+                        match = re.search(r"Completed:\s*(\d+\.\d+)", result)
+                        if not match:
+                            exit("unknown error, match failed")
+                        perf.append(float(match.group(1)) / 1000000)
+                plt.plot(threads, perf, label=objects[oid], marker=markers[oid], color=colors[oid],
+                         linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
+            plt.xticks(threads[1:])
+            plt.xlim(0, threads[-1] + 1)
+            plt.axvspan(threads[-1] / 2, threads[-1] + 1, color='lightgrey', alpha=0.8)
+            plt.grid(axis='y', color='darkgray', linestyle=':', linewidth=2, alpha=0.4)
+            plt.title(workloads[wid], x=0.5, y=1.02, fontsize=15)
+
+    fig.tight_layout()
+    lines, labels = fig.axes[-1].get_legend_handles_labels()
+    fig.legend(lines, labels, loc='upper center', ncol=len(objects) / 2, bbox_to_anchor=(0.5, 1.11), fontsize=15)
+    fig.text(-0.03, 0.5, 'Million Operations per Second', va='center', rotation='vertical', fontsize=15)
+    fig.text(0.485, -0.02, "Threads", va='center', fontsize=15)
+    fig.savefig("core-ops-tpt.pdf", bbox_inches='tight')
+    fig.show()
+
+    loads = ["Insert", "Lookup"]
+    nthd = 48
+
+    # figure tail latency
+    pattern = ["min", "50%", "90%", "99%", "99.9%", "99.99%"]
+    fig = plt.figure(figsize=(10, 3.5))
+    row, col = 1, 2
+    assert (col == len(loads))
+    for lid in range(len(loads)):
+        plt.subplot(row, col, lid + 1)
+        for oid in range(len(objects)):
+            latency = []
+            log_name = ('pibench-' + loads[lid] + '-' + libs[oid] + '-' + str(nthd) + '.log')
+            log_path = os.path.join(log_dir, log_name)
+            with open(log_path) as log:
+                result = log.read()
+                if not result:
+                    exit("Unknown error: " + log_path)
+                for pid in range(len(pattern)):
+                    escaped_pattern = re.escape(pattern[pid])
+                    match = re.search(rf"{escaped_pattern}:\s*(\d+)", result)
+                    if not match:
+                        exit("unknown error, match failed")
+                    latency.append(float(match.group(1)) / 1000)  # us
+            plt.plot(pattern, latency, label=objects[oid], marker=markers[oid], color=colors[oid],
+                     linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
+        plt.title(loads[lid], y=-0.2, fontsize=15)
+
+    fig.tight_layout()
+    lines, labels = fig.axes[-1].get_legend_handles_labels()
+    fig.legend(lines, labels, loc='upper center', ncol=len(objects) / 2, bbox_to_anchor=(0.5, 1.22), fontsize=15)
+    fig.text(-0.03, 0.5, 'Latency [us]', va='center', rotation='vertical', fontsize=15)
+    fig.savefig("core-ops-latency.pdf", bbox_inches='tight')
+    fig.show()
+
+    # figure DRAM/PMEM access
+    types = ["DRAM Reads", "DRAM Writes", "PMEM Reads", "PMEM Writes", "PMEM Media Reads", "PMEM Media Writes"]
+    patterns = ["DRAM Reads (bytes)", "DRAM Writes (bytes)", "NVM Reads (bytes)",
+                "NVM Writes (bytes)", "TotalMediaReads (bytes)", "TotalMediaWrites (bytes)"]
+    colors = ['lightsalmon', 'darkorange', 'lightblue', 'steelblue', 'lightgreen', 'forestgreen']
+    hatches = ['/', '\\', '/', '\\', '/', '\\']
+
+    fig = plt.figure(figsize=(30, 6))
+    row, col = len(loads), len(objects)
+    for lid in range(len(loads)):  # two row, insert/lookup
+        for oid in range(len(objects)):  # indexes and stores
+            plt.subplot(row, col, lid * col + oid + 1)
+            access_bytes = []
+            log_name = ('pibench-' + loads[lid] + '-' + libs[oid] + '-' + str(nthd) + '.log')
+            log_path = os.path.join(log_dir, log_name)
+            with open(log_path) as log:
+                result = log.read()
+                if not result:
+                    exit("Unknown error: " + log_path)
+                for tid in range(len(types)):  # access types
+                    escaped_pattern = re.escape(patterns[tid])
+                    match = re.search(rf"{escaped_pattern}:\s*(\d+)", result)
+                    if not match:
+                        exit("unknown error, match failed")
+                    access_bytes.append(float(match.group(1)) / (operation_count * 1000))
+
+            x = np.arange(len(types))
+            plt.bar(x, access_bytes, color=colors, hatch=hatches, label=types, alpha=1)
+            plt.xticks([])
+            if lid == len(loads) - 1:
+                plt.title(objects[oid], y=-0.2, fontsize=15)
+
+    fig.tight_layout()
+    lines, labels = fig.axes[-1].get_legend_handles_labels()
+    fig.legend(lines, labels, loc='upper center', ncol=len(types), bbox_to_anchor=(0.5, 1.1), fontsize=15)
+    fig.text(-0.01, 0.5, 'Kilobytes per Operation', va='center', rotation='vertical', fontsize=15)
+    fig.savefig("core-ops-access.pdf", bbox_inches='tight')
+    fig.show()
+
+
 def figure_scalability(key_size, val_size):
+    store_path = "/mnt/pmem0/ycsb-store"
+    store_size = 128
+    records_num = 200000000
+    run_duration = 60
+    enable_pcm = 1
+
+    stores = ["BasicSlabStore", "SlabStore", "pmemkv", "Plush", "Viper", "RocksDB"]
+    colors = ['steelblue', 'red', 'blue', 'orange', 'green', 'purple', 'gray', 'brown']
+    markers = ["X", "d", "o", "s", "^", "v", "P", "*"]
+
     threads = [1, 2, 4, 8, 16, 24, 32, 40, 48]
     read_ratios = [100, 75, 50, 25, 0]
     workloads = ["Read-Only", "Read-Heavy", "Balanced", "Write-Heavy", "Write-Only"]
@@ -83,6 +238,7 @@ def figure_scalability(key_size, val_size):
                          linewidth=2, markersize=10, markeredgewidth=0.4, markeredgecolor='black', alpha=0.95)
             plt.xticks(threads[1:])
             plt.xlim(0, threads[-1] + 1)
+            plt.axvspan(threads[-1] / 2, threads[-1] + 1, color='lightgrey', alpha=0.8)
             plt.grid(axis='y', color='darkgray', linestyle=':', linewidth=2, alpha=0.4)
 
     fig.tight_layout()
@@ -113,6 +269,8 @@ if __name__ == "__main__":
     plt.rcParams['pdf.fonttype'] = 42
     plt.rcParams['ps.fonttype'] = 42
     plt.rcParams['font.weight'] = 'medium'
+
+    figure_core_ops()
 
     figure_scalability(8, 32)
     figure_scalability(32, 200)

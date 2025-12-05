@@ -4,12 +4,12 @@ set(CMAKE_CXX_STANDARD 20)
 add_library(plush SHARED ./plush/src/hashtable/Hashtable.cpp)
 target_compile_options(plush PRIVATE -mavx512f -mavx512vl)
 
-#add_custom_target(rocksdb COMMAND make ROCKSDB_ON_DCPMM=1 shared_lib -j 32
-#        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/test/pmem-rocksdb)
+add_custom_target(rocksdb COMMAND make ROCKSDB_ON_DCPMM=1 shared_lib -j 32
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/test/pmem-rocksdb)
 
 function(add_mytest name files)
     add_executable(test-${name} ${files})
-    #    add_dependencies(test-${name} rocksdb)
+    add_dependencies(test-${name} rocksdb)
     target_compile_definitions(test-${name} PUBLIC -DON_DCPMM)
     target_include_directories(test-${name} PRIVATE concurrentqueue)
     target_include_directories(test-${name} PRIVATE ${PROJECT_SOURCE_DIR}/pcm/src)
@@ -66,6 +66,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-long-long -fPIC -march=native")
 set(PMDK_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/pmdk")
 ExternalProject_Add(PMDK
         GIT_REPOSITORY https://gitee.com/spearNeil/pmdk-addr-patch.git
+#        GIT_REPOSITORY git@gitee.com:spearNeil/pmdk-addr-patch.git
         GIT_TAG addr-patch
         BUILD_IN_SOURCE 1
         BUILD_COMMAND $(MAKE) EXTRA_CFLAGS=-Wno-error
@@ -79,6 +80,7 @@ ExternalProject_Add(PMDK
 FetchContent_Declare(
         epoch_reclaimer
         GIT_REPOSITORY https://gitee.com/spearNeil/epoch-reclaimer.git
+#        GIT_REPOSITORY git@gitee.com:spearNeil/epoch-reclaimer.git
         GIT_TAG master
 )
 if (NOT epoch_reclaimer_POPULATED)
