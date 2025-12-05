@@ -22,7 +22,7 @@ int main(int argc, char* argv[]) {
   if(argc < 12) {
     std::cerr << "[USAGE]: store path, store size (GiB), store type, worker thread number, records number,\n"
                  "         key size (>8, <=256), value size (>8, <=4096), read ratio(0,100), run duration (seconds)\n"
-                 "         enable pcm, request distribution (0-unif, 1-zipf), zipf skewness (0.99 by default)"
+                 "         enable pcm, request distribution (0-unif, 1-zipf), script path, zipf skewness (0.99 by default)"
               << std::endl;
     exit(-1);
   }
@@ -38,8 +38,10 @@ int main(int argc, char* argv[]) {
   size_t run_duration = std::stoul(argv[9]);
   bool enable_pcm = std::stoi(argv[10]);
   bool zipf_dis = std::stoi(argv[11]);
+  std::string script = "./pm-script.py"; // script for extract total pmem media access (bytes)
+  if(argc > 12) script = std::string(argv[12]);
   double zipf_skew = 0.99;
-  if(argc > 12) zipf_skew = std::stod(argv[12]);
+  if(argc > 13) zipf_skew = std::stod(argv[13]);
 
   if(store_type >= NUM_KVSTORE) {
     std::cerr << "[ERROR]: invalid store type" << std::endl;
@@ -171,6 +173,17 @@ int main(int argc, char* argv[]) {
               << std::endl;
 
     before = pcm->getSystemCounterState();
+
+    int result = system("ipmctl show -performance TotalMediaReads > media-reads.before");
+    if(result != 0) {
+      std::cerr << "ipmctl error, " << result << std::endl;
+      exit(result);
+    }
+    result = system("ipmctl show -performance TotalMediaWrites > media-writes.before");
+    if(result != 0) {
+      std::cerr << "ipmctl error, " << result << std::endl;
+      exit(result);
+    }
   }
 
 
@@ -243,6 +256,33 @@ int main(int argc, char* argv[]) {
               << std::endl;
 
     pcm->cleanup();
+
+    int result = system("ipmctl show -performance TotalMediaReads > media-reads.after");
+    if(result != 0) {
+      std::cerr << "ipmctl error, " << result << std::endl;
+      exit(result);
+    }
+    result = system("ipmctl show -performance TotalMediaWrites > media-writes.after");
+    if(result != 0) {
+      std::cerr << "ipmctl error, " << result << std::endl;
+      exit(result);
+    }
+
+
+    std::string script_read = std::string("python ") + script +
+                              " ./media-reads.before ./media-reads.after TotalMediaReads";
+    result = system(script_read.data());
+    if(result != 0) {
+      std::cerr << "python script error" << std::endl;
+      exit(result);
+    }
+    std::string script_write = std::string("python ") + script +
+                               " ./media-writes.before ./media-writes.after TotalMediaWrites";
+    result = system(script_write.data());
+    if(result != 0) {
+      std::cerr << "python script error" << std::endl;
+      exit(result);
+    }
   }
 
   return 0;
