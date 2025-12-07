@@ -137,12 +137,25 @@ target_link_libraries(pibench-lbtree liblbtree)
 
 set(CMAKE_CXX_STANDARD 20)
 add_library(pibench-slabstore SHARED libs/libslabstore.cpp)
+add_library(pibench-slabstore-var SHARED libs/libslabstore.cpp)
 
 add_library(pibench-viper SHARED libs/libviper.cpp)
+add_library(pibench-viper-var SHARED libs/libviper-var.cpp)
 target_include_directories(pibench-viper PRIVATE concurrentqueue)
+target_include_directories(pibench-viper-var PRIVATE concurrentqueue)
 
 add_library(pibench-plush SHARED libs/libplush.cpp)
+add_library(pibench-plush-var SHARED libs/libplush-var.cpp)
 target_link_libraries(pibench-plush plush)
+target_link_libraries(pibench-plush-var plush)
 
 add_library(pibench-pmemkv SHARED libs/libpmemkv.cpp)
+add_library(pibench-pmemkv-var SHARED libs/libpmemkv.cpp)
 target_link_libraries(pibench-pmemkv pmemkv)
+target_link_libraries(pibench-pmemkv-var pmemkv)
+
+add_library(pibench-rocksdb-var SHARED libs/librocksdb.cpp)
+add_dependencies(pibench-rocksdb-var rocksdb)
+target_compile_definitions(pibench-rocksdb-var PUBLIC -DON_DCPMM)
+target_link_libraries(pibench-rocksdb-var ${PROJECT_SOURCE_DIR}/test/pmem-rocksdb/librocksdb.so)
+target_include_directories(pibench-rocksdb-var PRIVATE pmem-rocksdb/include)

@@ -5,7 +5,7 @@
 #include <iostream>
 
 class PlushWrapper : public tree_api {
-  typedef Hashtable<uint64_t, uint64_t, PartitionType::Hash> DB;
+  typedef Hashtable<std::span<const std::byte>, std::span<const std::byte>, PartitionType::Hash> DB;
   DB* db;
 
  public:
@@ -24,21 +24,23 @@ class PlushWrapper : public tree_api {
   ~PlushWrapper() override = default;
 
   bool find(const char* key, size_t sz, char* value_out) override {
-    return db->lookup(*(uint64_t*) key, (uint8_t*) value_out);
+    return db->lookup(std::span<std::byte>((std::byte*) key, sz), (uint8_t*) value_out);
   }
 
   bool insert(const char* key, size_t key_sz, const char* value, size_t value_sz) override {
-    db->insert(*(uint64_t*) key, *(uint64_t*) value);
+    db->insert(std::span<std::byte>((std::byte*) key, key_sz),
+               std::span<std::byte>((std::byte*) value, value_sz));
     return true;
   }
 
   bool update(const char* key, size_t key_sz, const char* value, size_t value_sz) override {
-    db->insert(*(uint64_t*) key, *(uint64_t*) value);
+    db->insert(std::span<std::byte>((std::byte*) key, key_sz),
+               std::span<std::byte>((std::byte*) value, value_sz));
     return true;
   }
 
   bool remove(const char* key, size_t key_sz) override {
-    db->remove(*(uint64_t*) key);
+    db->remove(std::span<std::byte>((std::byte*) key, key_sz));
     return true;
   }
 
@@ -48,7 +50,5 @@ class PlushWrapper : public tree_api {
 };
 
 extern "C" tree_api* create_tree(const tree_options_t& opt) {
-  assert(opt.key_size == 8);
-  assert(opt.value_size == 8);
   return new PlushWrapper();
 }

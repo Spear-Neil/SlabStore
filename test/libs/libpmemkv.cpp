@@ -26,9 +26,9 @@ class PmemKVWrapper : public tree_api {
   bool find(const char* key, size_t sz, char* value_out) override {
     std::string value;
     auto status = db.get(std::string_view(key, sz), &value);
-    memcpy(value_out, value.data(), value.size());
 
     if(status != pmem::kv::status::OK) return false;
+    memcpy(value_out, value.data(), value.size());
     return true;
   }
 
@@ -54,7 +54,5 @@ class PmemKVWrapper : public tree_api {
 };
 
 extern "C" tree_api* create_tree(const tree_options_t& opt) {
-  assert(opt.key_size == 8);
-  assert(opt.value_size == 8);
   return new PmemKVWrapper();
 }

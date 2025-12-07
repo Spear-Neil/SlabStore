@@ -4,7 +4,8 @@ import re
 import shutil
 import matplotlib.pyplot as plt
 import numpy as np
-from click import pause
+from matplotlib.ticker import FormatStrFormatter
+from matplotlib.gridspec import GridSpec
 
 # global parameters
 log_dir = "./logs/"
@@ -40,10 +41,10 @@ def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
     insert_ratio = [1.0, 0, 0, 0.5]
     lookup_ratio = [0, 1.0, 0, 0.5]
     remove_ratio = [0, 0, 1.0, 0]
-    objects = ["SlabStore", "pmemkv", "Plush(fixed)", "Viper(fixed)", "Dash", "FAST+FAIR", "FPTree", "uTree"]
-    libs = ["slabstore", "pmemkv", "plush", "viper", "dash", "fastfair", "fptree", "utree"]
-    colors = ['red', 'blue', 'orange', 'green', 'purple', 'gray', 'steelblue', 'brown']
-    markers = ["d", "o", "s", "^", "v", "P", "X", "*"]
+    objects = ["pmemkv", "SlabStore", "Plush(fixed-size)", "Viper(fixed-size)", "Dash", "FAST+FAIR", "FPTree", "uTree"]
+    libs = ["pmemkv", "slabstore", "plush", "viper", "dash", "fastfair", "fptree", "utree"]
+    colors = ['blue', 'red', 'orange', 'green', 'purple', 'gray', 'steelblue', 'brown']
+    markers = ["o", "d", "s", "^", "v", "P", "X", "*"]
 
     for wid in range(len(workloads)):  # workloads: core kvs operations
         if workloads[wid] == "Insert":
@@ -70,6 +71,7 @@ def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
                     result = subprocess.run(pibench, capture_output=True, text=True).stdout
                     with open(log_path, "w") as log:
                         log.write(str(pibench) + "\n" + result)
+    remove_path("/mnt/pmem0/pibench")
 
     # figure throughput
     fig = plt.figure(figsize=(10, 7.5))
@@ -108,10 +110,10 @@ def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
     fig.show()
 
     loads = ["Insert", "Lookup"]
-    nthd = 48
+    nthd = 24
 
     # figure tail latency
-    pattern = ["min", "50%", "90%", "99%", "99.9%", "99.99%"]
+    pattern = ["min", "50%", "90%", "99%", "99.9%"]
     fig = plt.figure(figsize=(10, 3.5))
     row, col = 1, 2
     assert (col == len(loads))
@@ -151,9 +153,14 @@ def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
 
     fig = plt.figure(figsize=(30, 6))
     row, col = len(loads), len(objects)
+    y_max = [[0, 0], [0, 0]]
+    wide, narrow = -0.1, -0.24
+    gs = GridSpec(row, col * 2 - 1, figure=fig,
+                  width_ratios=[1, wide, 1, narrow, 1, narrow, 1, wide,
+                                1, narrow, 1, narrow, 1, narrow, 1])
     for lid in range(len(loads)):  # two row, insert/lookup
         for oid in range(len(objects)):  # indexes and stores
-            plt.subplot(row, col, lid * col + oid + 1)
+            ax = fig.add_subplot(gs[lid, oid * 2])
             access_bytes = []
             log_name = ('pibench-' + loads[lid] + '-' + libs[oid] + '-' + str(nthd) + '.log')
             log_path = os.path.join(log_dir, log_name)
@@ -169,15 +176,42 @@ def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
                     access_bytes.append(float(match.group(1)) / (operation_count * 1000))
 
             x = np.arange(len(types))
-            plt.bar(x, access_bytes, color=colors, hatch=hatches, label=types, alpha=1)
-            plt.xticks([])
+            ax.bar(x, access_bytes, color=colors, hatch=hatches, label=types, alpha=1)
+            ax.set_xticks([])
             if lid == len(loads) - 1:
-                plt.title(objects[oid], y=-0.2, fontsize=15)
+                ax.set_title(objects[oid], y=-0.2, fontsize=15)
+
+            if libs.index("slabstore") <= oid <= libs.index("viper"):
+                cur_max = max(access_bytes)
+                y_max[lid][0] = cur_max if cur_max > y_max[lid][0] else y_max[lid][0]
+            if libs.index("dash") <= oid <= libs.index("utree"):
+                cur_max = max(access_bytes)
+                y_max[lid][1] = cur_max if cur_max > y_max[lid][1] else y_max[lid][1]
+
+    # adjust ylim
+    scale = 1.05
+    for lid in range(len(loads)):  # two row, insert/lookup
+        for oid in range(len(objects)):  # indexes and stores
+            subplot = fig.axes[lid * col + oid]
+            subplot.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+            if libs.index("slabstore") <= oid <= libs.index("viper"):
+                subplot.set_ylim(0, y_max[lid][0] * scale)
+                if oid != libs.index("slabstore"):
+                    subplot.tick_params(axis='y', length=0)
+                    subplot.set_yticklabels([])
+            if libs.index("dash") <= oid <= libs.index("utree"):
+                subplot.set_ylim(0, y_max[lid][1] * scale)
+                if oid != libs.index("dash"):
+                    subplot.tick_params(axis='y', length=0)
+                    subplot.set_yticklabels([])
+            subplot.grid(axis='y', color='darkgray', linestyle=':', linewidth=2, alpha=0.5)
 
     fig.tight_layout()
     lines, labels = fig.axes[-1].get_legend_handles_labels()
     fig.legend(lines, labels, loc='upper center', ncol=len(types), bbox_to_anchor=(0.5, 1.1), fontsize=15)
     fig.text(-0.01, 0.5, 'Kilobytes per Operation', va='center', rotation='vertical', fontsize=15)
+    fig.text(1.005, 0.75, loads[0], va='center', rotation=270, fontsize=15)
+    fig.text(1.005, 0.25, loads[1], va='center', rotation=270, fontsize=15)
     fig.savefig("core-ops-access.pdf", bbox_inches='tight')
     fig.show()
 
@@ -235,7 +269,7 @@ def figure_scalability(key_size, val_size):
                         exit("unknown error, match failed")
                     perf.append(float(match.group(1)))
                 plt.plot(threads, perf, label=stores[sid], marker=markers[sid], color=colors[sid],
-                         linewidth=2, markersize=10, markeredgewidth=0.4, markeredgecolor='black', alpha=0.95)
+                         linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
             plt.xticks(threads[1:])
             plt.xlim(0, threads[-1] + 1)
             plt.axvspan(threads[-1] / 2, threads[-1] + 1, color='lightgrey', alpha=0.8)

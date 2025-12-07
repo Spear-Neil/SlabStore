@@ -57,7 +57,5 @@ class SlabStoreWrapper : public tree_api {
 };
 
 extern "C" tree_api* create_tree(const tree_options_t& opt) {
-  assert(opt.key_size == 8);
-  assert(opt.value_size == 8);
   return new SlabStoreWrapper();
 }
