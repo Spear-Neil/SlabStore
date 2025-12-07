@@ -244,7 +244,8 @@ def figure_scalability(key_size, val_size):
                     remove_path(store_path)
                     ycsb_test = ["./build/test/test-ycsb-test", store_path, str(store_size),
                                  str(sid), str(nthd), str(records_num), str(key_size), str(val_size),
-                                 str(read_ratios[cid]), str(run_duration), str(enable_pcm), str(rid), str(pm_script)]
+                                 str(read_ratios[cid]), str(run_duration), str(enable_pcm), str(rid),
+                                 str(48), str(pm_script)]
                     log_name = ('scale-' + str(store_size) + '-' + str(sid) + '-' + str(nthd) + '-' + str(records_num)
                                 + '-' + str(key_size) + '-' + str(val_size) + '-' + str(read_ratios[cid])
                                 + '-' + str(run_duration) + '-' + str(enable_pcm) + '-' + str(rid) + '.log')
