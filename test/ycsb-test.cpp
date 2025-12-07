@@ -22,7 +22,8 @@ int main(int argc, char* argv[]) {
   if(argc < 12) {
     std::cerr << "[USAGE]: store path, store size (GiB), store type, worker thread number, records number,\n"
                  "         key size (>8, <=256), value size (>8, <=4096), read ratio(0,100), run duration (seconds)\n"
-                 "         enable pcm, request distribution (0-unif, 1-zipf), script path, zipf skewness (0.99 by default)"
+                 "         enable pcm, request distribution (0-unif, 1-zipf), load thread number (same as workers by default)\n"
+                 "         script path, zipf skewness (0.99 by default)"
               << std::endl;
     exit(-1);
   }
@@ -38,10 +39,12 @@ int main(int argc, char* argv[]) {
   size_t run_duration = std::stoul(argv[9]);
   bool enable_pcm = std::stoi(argv[10]);
   bool zipf_dis = std::stoi(argv[11]);
+  size_t nthd_load = nthd; // threads number for load phase
+  if(argc > 12) nthd_load = std::stoul(argv[12]);
   std::string script = "./pm-script.py"; // script for extract total pmem media access (bytes)
-  if(argc > 12) script = std::string(argv[12]);
+  if(argc > 13) script = std::string(argv[13]);
   double zipf_skew = 0.99;
-  if(argc > 13) zipf_skew = std::stod(argv[13]);
+  if(argc > 14) zipf_skew = std::stod(argv[14]);
 
   if(store_type >= NUM_KVSTORE) {
     std::cerr << "[ERROR]: invalid store type" << std::endl;
@@ -125,10 +128,10 @@ int main(int argc, char* argv[]) {
   std::cout << "\n" << "[INFO]: load phase ... " << std::flush;
   timer.start();
   workers.clear(), pin.reset_pinning_counter(0, 0);
-  std::vector<double> throughputs(nthd);
+  std::vector<double> throughputs(std::max(nthd, nthd_load));
   double load_tpt = 0;
   std::atomic<size_t> inserted = 0;
-  for(int tid = 0; tid < nthd; tid++) {
+  for(int tid = 0; tid < nthd_load; tid++) {
     workers.push_back(std::thread([&](int tid) {
       pin.pinning_thread_continuous(pthread_self());
       size_t block_idx = inserted.fetch_add(kInsertGran);
@@ -149,7 +152,7 @@ int main(int argc, char* argv[]) {
       throughputs[tid] = (double) processed / drt;
     }, tid));
   }
-  for(int tid = 0; tid < nthd; tid++) {
+  for(int tid = 0; tid < nthd_load; tid++) {
     workers[tid].join();
     load_tpt += throughputs[tid];
   }
