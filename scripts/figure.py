@@ -90,6 +90,8 @@ def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
                         if not result:
                             exit("Unknown error: " + log_path)
                         match = re.search(r"Completed:\s*(\d+\.\d+)", result)
+                        if workloads[wid] == "Remove": # some indexes failed to remove a lot of records
+                            match = re.search(r"Succeeded:\s*(\d+\.\d+)", result)
                         if not match:
                             exit("unknown error, match failed")
                         perf.append(float(match.group(1)) / 1000000)
@@ -114,7 +116,7 @@ def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
 
     # figure tail latency
     pattern = ["min", "50%", "90%", "99%", "99.9%"]
-    fig = plt.figure(figsize=(10, 3.5))
+    fig = plt.figure(figsize=(10, 3.8))
     row, col = 1, 2
     assert (col == len(loads))
     for lid in range(len(loads)):
@@ -139,7 +141,7 @@ def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
 
     fig.tight_layout()
     lines, labels = fig.axes[-1].get_legend_handles_labels()
-    fig.legend(lines, labels, loc='upper center', ncol=len(objects) / 2, bbox_to_anchor=(0.5, 1.22), fontsize=15)
+    # fig.legend(lines, labels, loc='upper center', ncol=len(objects) / 2, bbox_to_anchor=(0.5, 1.22), fontsize=15)
     fig.text(-0.03, 0.5, 'Latency [us]', va='center', rotation='vertical', fontsize=15)
     fig.savefig("core-ops-latency.pdf", bbox_inches='tight')
     fig.show()
@@ -270,8 +272,10 @@ def figure_scalability(key_size, val_size):
                     if not match:
                         exit("unknown error, match failed")
                     perf.append(float(match.group(1)))
+                marker_size = 12
+                if cid == 0 and sid == 1: marker_size = 14
                 plt.plot(threads, perf, label=stores[sid], marker=markers[sid], color=colors[sid],
-                         linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
+                         linewidth=3, markersize=marker_size, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
             plt.xticks(threads[1:])
             plt.xlim(0, threads[-1] + 1)
             plt.axvspan(threads[-1] / 2, threads[-1] + 1, color='lightgrey', alpha=0.8)
