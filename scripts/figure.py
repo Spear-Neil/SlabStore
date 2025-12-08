@@ -223,8 +223,9 @@ def figure_scalability(key_size, val_size):
     run_duration = 60
     enable_pcm = 1
 
-    stores = ["BasicSlabStore", "SlabStore", "pmemkv", "Plush", "Viper", "RocksDB"]
-    colors = ['steelblue', 'red', 'blue', 'orange', 'green', 'purple', 'gray', 'brown']
+    # the order can not be changed
+    stores = ["pmemkv", "BasicSlabStore", "SlabStore", "Plush", "Viper", "RocksDB"]
+    colors = ['blue', 'steelblue', 'red', 'orange', 'green', 'purple', 'gray', 'brown']
     markers = ["X", "d", "o", "s", "^", "v", "P", "*"]
 
     threads = [1, 2, 4, 8, 16, 24, 32, 40, 48]
