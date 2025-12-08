@@ -44,7 +44,7 @@ def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
     objects = ["pmemkv", "SlabStore", "Plush(fixed-size)", "Viper(fixed-size)", "Dash", "FAST+FAIR", "FPTree", "uTree"]
     libs = ["pmemkv", "slabstore", "plush", "viper", "dash", "fastfair", "fptree", "utree"]
     colors = ['blue', 'red', 'orange', 'green', 'purple', 'gray', 'steelblue', 'brown']
-    markers = ["o", "d", "s", "^", "v", "P", "X", "*"]
+    markers = ["o", "d", "s", "^", "X", "P", "v", "*"]
 
     for wid in range(len(workloads)):  # workloads: core kvs operations
         if workloads[wid] == "Insert":
@@ -226,7 +226,7 @@ def figure_scalability(key_size, val_size):
     # the order can not be changed
     stores = ["pmemkv", "BasicSlabStore", "SlabStore", "Plush", "Viper", "RocksDB"]
     colors = ['blue', 'steelblue', 'red', 'orange', 'green', 'purple', 'gray', 'brown']
-    markers = ["X", "d", "o", "s", "^", "v", "P", "*"]
+    markers = ["o", "X", "d", "s", "^", "v", "P", "*"]
 
     threads = [1, 2, 4, 8, 16, 24, 32, 40, 48]
     read_ratios = [100, 75, 50, 25, 0]
