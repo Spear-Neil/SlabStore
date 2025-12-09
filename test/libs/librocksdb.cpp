@@ -8,7 +8,7 @@ class RocksDBWrapper : public tree_api {
   rocksdb::DB* db;
 
  public:
-  RocksDBWrapper() {
+  RocksDBWrapper() : db(nullptr) {
     const std::string path = "/mnt/pmem0/pibench/rocksdb";
     const size_t size = (0x01ul << 30) * 100;
 
@@ -36,6 +36,8 @@ class RocksDBWrapper : public tree_api {
       exit(-1);
     }
   }
+
+  ~RocksDBWrapper() override { delete db; }
 
   bool find(const char* key, size_t sz, char* value_out) override {
     rocksdb::ReadOptions ropt;
