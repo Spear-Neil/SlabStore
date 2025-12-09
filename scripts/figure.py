@@ -302,6 +302,64 @@ def figure_scalability(key_size, val_size, only_unif=False):
     fig.show()
 
 
+def figure_ycsb_insert():
+    store_path = "/mnt/pmem0/ycsb-store"
+    store_size = 128
+    records_num = 200000000
+
+    # the order can not be changed
+    stores = ["pmemkv", "BasicSlabStore", "SlabStore", "Plush", "Viper", "RocksDB"]
+    colors = ['blue', 'steelblue', 'red', 'orange', 'green', 'purple', 'gray', 'brown']
+    markers = ["o", "X", "d", "s", "^", "v", "P", "*"]
+    threads = [1, 2, 4, 8, 16, 24, 32, 40, 48]
+    records_size = [[8, 32], [32, 200]]
+
+    for rid in range(len(records_size)):
+        for sid in range(len(stores)):
+            for nthd in threads:
+                key_size, val_size = records_size[rid]
+                ycsb_insert = ["./build/test/test-ycsb-test", store_path, str(store_size),
+                               str(sid), str(nthd), str(records_num), str(key_size), str(val_size),
+                               str(0), str(0), str(0), str(0), str(nthd), str(pm_script)]
+                log_name = ("ycsb-insert-" + str(rid) + "-" + str(sid) + "-" + str(nthd) + ".log")
+                log_path = os.path.join(log_dir, log_name)
+                if not os.path.exists(log_path):
+                    remove_path(store_path)
+                    result = subprocess.run(ycsb_insert, capture_output=True, text=True).stdout
+                    with open(log_path, 'w') as log:
+                        log.write(str(ycsb_insert) + "\n" + result + "\n\n")
+    remove_path(store_path)
+
+    fig, axes = plt.subplots(1, len(records_size), figsize=(10, 3.8))
+    for rid in range(len(records_size)):
+        for sid in range(len(stores)):
+            perf = []
+            for nthd in threads:
+                log_name = ("ycsb-insert-" + str(rid) + "-" + str(sid) + "-" + str(nthd) + ".log")
+                log_path = os.path.join(log_dir, log_name)
+                with open(log_path) as log:
+                    result = log.read()
+                    if not result: exit("unknown error, " + log_name)
+                    match = re.search(r"load phase.*?throughput:\s*([\d.]+)", result)
+                    if not match: exit("unknown error, match failed")
+                    perf.append(float(match.group(1)))
+            axes[rid].plot(threads, perf, label=stores[sid], marker=markers[sid], color=colors[sid],
+                           linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
+        axes[rid].set_xticks(threads[1:])
+        axes[rid].set_xlim(0, threads[-1] + 1)
+        axes[rid].axvspan(threads[-1] / 2, threads[-1] + 1, color='lightgrey', alpha=0.8)
+        axes[rid].grid(axis='y', color='darkgray', linestyle=':', linewidth=2, alpha=0.4)
+        axes[rid].set_title(str(records_size[rid]), x=0.5, y=1.02, fontsize=15)
+
+    fig.tight_layout()
+    lines, labels = fig.axes[-1].get_legend_handles_labels()
+    fig.legend(lines, labels, loc='upper center', ncol=len(stores), bbox_to_anchor=(0.5, 1.14), fontsize=15)
+    fig.text(-0.03, 0.50, 'Million Operations per Second', va='center', rotation='vertical', fontsize=15)
+    fig.text(0.485, -0.02, "Threads", va='center', fontsize=15)
+    fig.savefig("ycsb-insert.pdf", bbox_inches='tight')
+    fig.show()
+
+
 if __name__ == "__main__":
     build_project()
 
@@ -317,3 +375,5 @@ if __name__ == "__main__":
 
     figure_scalability(8, 32, False)
     figure_scalability(32, 200, True)
+
+    figure_ycsb_insert()
