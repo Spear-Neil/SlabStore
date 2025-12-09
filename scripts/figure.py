@@ -90,7 +90,7 @@ def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
                         if not result:
                             exit("Unknown error: " + log_path)
                         match = re.search(r"Completed:\s*(\d+\.\d+)", result)
-                        if workloads[wid] == "Remove": # some indexes failed to remove a lot of records
+                        if workloads[wid] == "Remove":  # some indexes failed to remove a lot of records
                             match = re.search(r"Succeeded:\s*(\d+\.\d+)", result)
                         if not match:
                             exit("unknown error, match failed")
@@ -218,7 +218,7 @@ def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
     fig.show()
 
 
-def figure_scalability(key_size, val_size):
+def figure_scalability(key_size, val_size, only_unif=False):
     store_path = "/mnt/pmem0/ycsb-store"
     store_size = 128
     records_num = 200000000
@@ -234,8 +234,10 @@ def figure_scalability(key_size, val_size):
     read_ratios = [100, 75, 50, 25, 0]
     workloads = ["Read-Only", "Read-Heavy", "Balanced", "Write-Heavy", "Write-Only"]
     distributions = ["unif", "zipf"]
+    height = 6
+    if only_unif: distributions, height = ["unif"], 3
 
-    fig = plt.figure(figsize=(20, 6))
+    fig = plt.figure(figsize=(20, height))
     row, col = len(distributions), len(read_ratios)
 
     for rid in range(len(distributions)):  # distribution [unif, zipf]
@@ -283,7 +285,8 @@ def figure_scalability(key_size, val_size):
 
     fig.tight_layout()
     lines, labels = fig.axes[-1].get_legend_handles_labels()
-    fig.legend(lines, labels, loc='upper center', ncol=len(stores), bbox_to_anchor=(0.5, 1.14), fontsize=15)
+    if not only_unif:
+        fig.legend(lines, labels, loc='upper center', ncol=len(stores), bbox_to_anchor=(0.5, 1.14), fontsize=15)
     fig.text(-0.03, 0.5, 'Million Operations per Second', va='center', rotation='vertical', fontsize=15)
     fig.text(0.485, -0.02, "Threads", va='center', fontsize=15)
 
@@ -312,5 +315,5 @@ if __name__ == "__main__":
 
     figure_core_ops()
 
-    figure_scalability(8, 32)
-    figure_scalability(32, 200)
+    figure_scalability(8, 32, False)
+    figure_scalability(32, 200, True)
