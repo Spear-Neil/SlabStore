@@ -410,7 +410,7 @@ class HashStore {
     } else { kv_len = sizeof(KVPair) + vlen; }
 
     KVPair* kv = nullptr;
-    if(kWriteOpt) kv = (KVPair*) thread_limbo().acquire(kv_len);
+    /*if(kWriteOpt)*/ kv = (KVPair*) thread_limbo().acquire(kv_len);
 
     if(kv != nullptr) { // write kv pair into expired object
       bool same = same_cache_line(kv, kv_len);
@@ -473,7 +473,7 @@ class HashStore {
     // a previous old kv version may have not released into allocator by epoch-based reclaimer,
     // so we insert a tombstone for delete operation, and its space will be reclaimed during store closing
     KVPair* kv = nullptr;
-    if(kWriteOpt) kv = (KVPair*) thread_limbo().acquire(kv_len);
+    /*if(kWriteOpt)*/ kv = (KVPair*) thread_limbo().acquire(kv_len);
     if(kv != nullptr) {
       bool same = same_cache_line(kv, kv_len);
       kv->invalidate();  // invalid the expired object
