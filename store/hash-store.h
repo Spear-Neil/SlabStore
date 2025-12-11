@@ -158,7 +158,7 @@ class HashStore {
   typedef util::KVPair<K, OptRowValue> KVPair;
 
   HashStore() : slab_(), index_(), sc_(nullptr), tomb_size_(0), version_(nullptr) {
-    if(kWriteOpt) sc_ = new SizeClass();
+    /*if(kWriteOpt)*/ sc_ = new SizeClass();
     version_ = new std::atomic<uint64_t>[N]{};
     for(size_t i = 0; i < N; i++) version_[i] = 0;
   }
@@ -365,7 +365,9 @@ class HashStore {
     } else { kv_len = sizeof(KVPair) + vlen; }
 
     KVPair* kv = nullptr;
-    if(kWriteOpt) kv = (KVPair*) thread_limbo().acquire(kv_len);
+    /* a little redundant work seems to benefit small records insert,
+     * because metadata cache line reflush is harmful, see also in acquire interface */
+    /*if(kWriteOpt)*/ kv = (KVPair*) thread_limbo().acquire(kv_len);
 
     if(kv != nullptr) { // write kv pair into expired object
       bool same = same_cache_line(kv, kv_len);
