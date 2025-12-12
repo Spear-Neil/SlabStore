@@ -13,9 +13,6 @@
 [submodule "test/pmem-rocksdb"]
 	path = test/pmem-rocksdb
 	url = https://gitee.com/spearNeil/pmem-rocksdb.git
-[submodule "pcm"]
-	path = pcm
-	url = https://gitee.com/spearNeil/pcm.git
 [submodule "test/pibench"]
 	path = test/pibench
 	url = https://gitee.com/spearNeil/pibench.git
