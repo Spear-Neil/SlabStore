@@ -101,7 +101,7 @@ def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
                          linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
             plt.xticks(threads[1:])
             plt.xlim(0, threads[-1] + 1)
-            plt.axvspan(threads[-1] / 2, threads[-1] + 1, color='lightgrey', alpha=0.8)
+            plt.axvspan(threads[-1] / 2, threads[-1] + 1, color='lightgrey', alpha=0.4)
             plt.grid(axis='y', color='darkgray', linestyle=':', linewidth=2, alpha=0.4)
             plt.title(workloads[wid], x=0.5, y=1.02, fontsize=15)
 
@@ -282,7 +282,7 @@ def figure_scalability(key_size, val_size, only_unif=False):
                          linewidth=3, markersize=marker_size, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
             plt.xticks(threads[1:])
             plt.xlim(0, threads[-1] + 1)
-            plt.axvspan(threads[-1] / 2, threads[-1] + 1, color='lightgrey', alpha=0.8)
+            plt.axvspan(threads[-1] / 2, threads[-1] + 1, color='lightgrey', alpha=0.4)
             plt.grid(axis='y', color='darkgray', linestyle=':', linewidth=2, alpha=0.4)
 
     fig.tight_layout()
@@ -348,6 +348,7 @@ def figure_ycsb_access(key_size, val_size):
     gs = gridspec.GridSpec(row, col * 2 - 1, figure=fig, width_ratios=width)
 
     y_max = [0, 0]
+    slabstore_media_writes = []
     for rid in range(len(loads_indexes)):
         for cid in range(len(sids)):
             ax = fig.add_subplot(gs[rid, cid * 2])
@@ -371,6 +372,8 @@ def figure_ycsb_access(key_size, val_size):
             ax.set_xticks([])
             if rid == len(loads_indexes) - 1:
                 ax.set_title(stores[sid], y=-0.25, fontsize=12)
+                assert (sid - 1 == cid)
+                if sid == 1 or sid == 2: slabstore_media_writes.append(volumes[-1])
 
             cur_max = max(volumes)
             y_max[rid] = cur_max if cur_max > y_max[rid] else y_max[rid]
@@ -387,6 +390,14 @@ def figure_ycsb_access(key_size, val_size):
                 subplot.tick_params(axis='y', length=0)
                 subplot.set_yticklabels([])
             subplot.grid(axis='y', color='darkgray', linestyle=':', linewidth=2, alpha=0.5)
+
+            # add highlight rectangle for slabstore and basic-slabstore
+            sid = sids[cid]
+            if rid == len(loads_indexes) - 1 and (sid == 1 or sid == 2):  # SlabStore
+                rect = plt.Rectangle((0.5, -0.0), 0.48, 0.01 + slabstore_media_writes[cid] * scale / y_max[rid],
+                                     transform=subplot.transAxes, linewidth=2, edgecolor='red', facecolor='none',
+                                     alpha=0.8)
+                subplot.add_patch(rect)
 
     fig.tight_layout()
     lines, labels = fig.axes[-1].get_legend_handles_labels()
@@ -444,7 +455,7 @@ def figure_ycsb_insert():
                            linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
         axes[rid].set_xticks(threads[1:])
         axes[rid].set_xlim(0, threads[-1] + 1)
-        axes[rid].axvspan(threads[-1] / 2, threads[-1] + 1, color='lightgrey', alpha=0.8)
+        axes[rid].axvspan(threads[-1] / 2, threads[-1] + 1, color='lightgrey', alpha=0.4)
         axes[rid].grid(axis='y', color='darkgray', linestyle=':', linewidth=2, alpha=0.4)
         axes[rid].set_title(str(records_size[rid]), x=0.5, y=1.02, fontsize=15)
 
