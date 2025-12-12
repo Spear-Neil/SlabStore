@@ -263,7 +263,9 @@ int main(int argc, char* argv[]) {
     std::cout << "[INFO]: Mem Writes: " << mem_writes << " MiB, " << mem_writes * 1000000 / drt << " MiB/S"
               << std::endl;
 
-    // it sometime gets unreasonable pmem_reads, I don't find the reason
+    // don't use the following pmem_reads/pmem_writes, there may be some errors, but I do not find the reason
+    // In pibench, pcm::getBytesReadFromPMM gets the same bytes as ipmctl, but here they are different
+    // and pmem_reads sometimes even unreasonable
     double pmem_reads = (double) pcm::getBytesReadFromPMM(before, after) / (0x01ul << 20);
     double pmem_writes = (double) pcm::getBytesWrittenToPMM(before, after) / (0x01ul << 20);
     std::cout << "[INFO]: PMM Reads: " << pmem_reads << " MiB, " << pmem_reads * 1000000 / drt << " MiB/S" << std::endl;
