@@ -4,8 +4,10 @@ import re
 import shutil
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib import gridspec
 from matplotlib.ticker import FormatStrFormatter
 from matplotlib.gridspec import GridSpec
+from matplotlib.ticker import MaxNLocator
 
 # global parameters
 log_dir = "./logs/"
@@ -287,7 +289,8 @@ def figure_scalability(key_size, val_size, only_unif=False):
     lines, labels = fig.axes[-1].get_legend_handles_labels()
     if not only_unif:
         fig.legend(lines, labels, loc='upper center', ncol=len(stores), bbox_to_anchor=(0.5, 1.14), fontsize=15)
-    fig.text(-0.03, 0.5, 'Million Operations per Second', va='center', rotation='vertical', fontsize=15)
+    text_size = 15 if not only_unif else 14
+    fig.text(-0.03, 0.5, 'Million Operations per Second', va='center', rotation='vertical', fontsize=text_size)
     fig.text(0.485, -0.02, "Threads", va='center', fontsize=15)
 
     vertical_begin, ver_step = 1 - 1.0 / row / 2, 1.0 / row
@@ -299,6 +302,100 @@ def figure_scalability(key_size, val_size, only_unif=False):
         fig.text(horizontal_begin + cid * hor_step, 1.01, workloads[cid], va='center', ha='center', fontsize=15)
     fig_name = 'scale-result-' + str(key_size) + '-' + str(val_size) + '.pdf'
     fig.savefig(fig_name, bbox_inches='tight')
+    fig.show()
+
+
+def figure_ycsb_access(key_size, val_size):
+    stores = ["pmemkv", "BasicSlabStore", "SlabStore", "Plush", "Viper", "RocksDB"]
+    workloads = ["Read-Only", "Read-Heavy", "Balanced", "Write-Heavy", "Write-Only"]
+    read_ratios = [100, 75, 50, 25, 0]
+    store_path = "/mnt/pmem0/ycsb-store"
+    store_size = 128
+    records_num = 200000000
+    run_duration = 60
+    enable_pcm = 1
+
+    nthd = 24
+    sids = [1, 2, 3, 4]
+    loads_indexes = [0, 4]  # "Read-Only" & "Write-Only"
+
+    # the scale-*.log pmem access results are unreasonable
+    for wid in loads_indexes:
+        for sid in sids:
+            ycsb_access = ["./build/test/test-ycsb-test", store_path, str(store_size),
+                           str(sid), str(nthd), str(records_num), str(key_size), str(val_size),
+                           str(read_ratios[wid]), str(run_duration), str(enable_pcm), str(0),
+                           str(48), str(pm_script)]
+            log_name = ("ycsb-access-" + str(wid) + "-" + str(sid) + "-" +
+                        str(key_size) + "-" + str(val_size) + ".log")
+            log_path = os.path.join(log_dir, log_name)
+            if not os.path.exists(log_path):
+                remove_path(store_path)
+                result = subprocess.run(ycsb_access, capture_output=True, text=True).stdout
+                with open(log_path, 'w') as log:
+                    log.write(str(ycsb_access) + "\n" + result + "\n\n")
+    remove_path(store_path)
+
+    types = ["DRAM Reads", "DRAM Writes", "PMEM Reads", "PMEM Writes", "PMEM Media Reads", "PMEM Media Writes"]
+    patterns = ["Mem Reads:", "Mem Writes:", "TotalReadRequests (bytes):", "TotalWriteRequests (bytes):",
+                "TotalMediaReads (bytes):", "TotalMediaWrites (bytes):"]
+    colors = ['lightsalmon', 'darkorange', 'lightblue', 'steelblue', 'lightgreen', 'forestgreen']
+    hatches = ['/', '\\', '/', '\\', '/', '\\']
+    row, col = len(loads_indexes), len(sids)
+    fig = plt.figure(figsize=(10, 4))
+    wide, narrow = -0.1, -0.08
+    width = [1, narrow, 1, narrow, 1, narrow, 1]
+    gs = gridspec.GridSpec(row, col * 2 - 1, figure=fig, width_ratios=width)
+
+    y_max = [0, 0]
+    for rid in range(len(loads_indexes)):
+        for cid in range(len(sids)):
+            ax = fig.add_subplot(gs[rid, cid * 2])
+            wid, sid = loads_indexes[rid], sids[cid]
+            log_name = ("ycsb-access-" + str(wid) + "-" + str(sid) + "-" +
+                        str(key_size) + "-" + str(val_size) + ".log")
+            log_path = os.path.join(log_dir, log_name)
+            volumes = []
+            with open(log_path) as log:
+                result = log.read()
+                if not result: exit("unknown error, no result")
+                for tid in range(len(types)):
+                    escaped_pattern = re.escape(patterns[tid])
+                    res = re.findall(rf'{escaped_pattern}\s*([\d.+e]+)', result)
+                    count = re.findall(r'total operation count:\s*(\d+)', result)
+                    MiB = 1024 * 1024 if tid == 0 or tid == 1 else 1
+                    volumes.append(float(res[-1]) * MiB / 1000 / float(count[-1]))
+
+            x = np.arange(len(types))
+            ax.bar(x, volumes, color=colors, hatch=hatches, label=types, alpha=1)
+            ax.set_xticks([])
+            if rid == len(loads_indexes) - 1:
+                ax.set_title(stores[sid], y=-0.25, fontsize=12)
+
+            cur_max = max(volumes)
+            y_max[rid] = cur_max if cur_max > y_max[rid] else y_max[rid]
+
+    # adjust ylim
+    scale = 1.05
+    for rid in range(len(loads_indexes)):
+        for cid in range(len(sids)):
+            subplot = fig.axes[rid * col + cid]
+            subplot.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+            subplot.yaxis.set_major_locator(MaxNLocator(nbins=6))
+            subplot.set_ylim(0, y_max[rid] * scale)
+            if cid != 0:
+                subplot.tick_params(axis='y', length=0)
+                subplot.set_yticklabels([])
+            subplot.grid(axis='y', color='darkgray', linestyle=':', linewidth=2, alpha=0.5)
+
+    fig.tight_layout()
+    lines, labels = fig.axes[-1].get_legend_handles_labels()
+    fig.legend(lines, labels, loc='upper center', ncol=len(types), bbox_to_anchor=(0.5, 1.1), fontsize=10)
+    fig.text(-0.01, 0.5, 'Kilobytes per Operation', va='center', rotation='vertical', fontsize=12)
+    fig.text(1.005, 0.75, workloads[loads_indexes[0]], va='center', rotation=270, fontsize=12)
+    fig.text(1.005, 0.25, workloads[loads_indexes[1]], va='center', rotation=270, fontsize=12)
+    file_name = "ycsb-access-" + str(key_size) + "-" + str(val_size) + ".pdf"
+    fig.savefig(file_name, bbox_inches='tight')
     fig.show()
 
 
@@ -353,8 +450,8 @@ def figure_ycsb_insert():
 
     fig.tight_layout()
     lines, labels = fig.axes[-1].get_legend_handles_labels()
-    fig.legend(lines, labels, loc='upper center', ncol=len(stores), bbox_to_anchor=(0.5, 1.14), fontsize=15)
-    fig.text(-0.03, 0.50, 'Million Operations per Second', va='center', rotation='vertical', fontsize=15)
+    fig.legend(lines, labels, loc='upper center', ncol=len(stores), bbox_to_anchor=(0.5, 1.14), fontsize=13)
+    fig.text(-0.03, 0.50, 'Million Operations per Second', va='center', rotation='vertical', fontsize=13)
     fig.text(0.485, -0.02, "Threads", va='center', fontsize=15)
     fig.savefig("ycsb-insert.pdf", bbox_inches='tight')
     fig.show()
@@ -371,9 +468,14 @@ if __name__ == "__main__":
     plt.rcParams['ps.fonttype'] = 42
     plt.rcParams['font.weight'] = 'medium'
 
+    # fixed-size records
     figure_core_ops()
 
+    # variable-size records
     figure_scalability(8, 32, False)
     figure_scalability(32, 200, True)
 
     figure_ycsb_insert()
+
+    figure_ycsb_access(8, 32)
+    figure_ycsb_access(32, 200)
