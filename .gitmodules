@@ -28,3 +28,6 @@
 [submodule "test/lbtree"]
 	path = test/lbtree
 	url = https://gitee.com/spearNeil/lbtree.git
+[submodule "pcm"]
+	path = pcm
+	url = https://gitee.com/spearNeil/pcm.git
