@@ -187,6 +187,17 @@ int main(int argc, char* argv[]) {
       std::cerr << "ipmctl error, " << result << std::endl;
       exit(result);
     }
+
+    result = system("ipmctl show -performance TotalReadRequests > read-req.before");
+    if(result != 0) {
+      std::cerr << "ipmctl error, " << result << std::endl;
+      exit(result);
+    }
+    result = system("ipmctl show -performance TotalWriteRequests > write-req.before");
+    if(result != 0) {
+      std::cerr << "ipmctl error, " << result << std::endl;
+      exit(result);
+    }
   }
 
 
@@ -252,6 +263,7 @@ int main(int argc, char* argv[]) {
     std::cout << "[INFO]: Mem Writes: " << mem_writes << " MiB, " << mem_writes * 1000000 / drt << " MiB/S"
               << std::endl;
 
+    // it sometime gets unreasonable pmem_reads, I don't find the reason
     double pmem_reads = (double) pcm::getBytesReadFromPMM(before, after) / (0x01ul << 20);
     double pmem_writes = (double) pcm::getBytesWrittenToPMM(before, after) / (0x01ul << 20);
     std::cout << "[INFO]: PMM Reads: " << pmem_reads << " MiB, " << pmem_reads * 1000000 / drt << " MiB/S" << std::endl;
@@ -266,6 +278,16 @@ int main(int argc, char* argv[]) {
       exit(result);
     }
     result = system("ipmctl show -performance TotalMediaWrites > media-writes.after");
+    if(result != 0) {
+      std::cerr << "ipmctl error, " << result << std::endl;
+      exit(result);
+    }
+    result = system("ipmctl show -performance TotalReadRequests > read-req.after");
+    if(result != 0) {
+      std::cerr << "ipmctl error, " << result << std::endl;
+      exit(result);
+    }
+    result = system("ipmctl show -performance TotalWriteRequests > write-req.after");
     if(result != 0) {
       std::cerr << "ipmctl error, " << result << std::endl;
       exit(result);
@@ -286,6 +308,22 @@ int main(int argc, char* argv[]) {
       std::cerr << "python script error" << std::endl;
       exit(result);
     }
+
+    std::string script_rreq = std::string("python ") + script +
+                              " ./read-req.before ./read-req.after TotalReadRequests";
+    result = system(script_rreq.data());
+    if(result != 0) {
+      std::cerr << "python script error" << std::endl;
+      exit(result);
+    }
+    std::string script_wreq = std::string("python ") + script +
+                              " ./write-req.before ./write-req.after TotalWriteRequests";
+    result = system(script_wreq.data());
+    if(result != 0) {
+      std::cerr << "python script error" << std::endl;
+      exit(result);
+    }
+
   }
 
   return 0;
