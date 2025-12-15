@@ -16,6 +16,9 @@
 #include <iostream>
 #include <array>
 #include <deque>
+#include <vector>
+#include <thread>
+#include <unordered_map>
 
 #include "timer.h"
 #include "hash-table.h"
@@ -288,6 +291,8 @@ class HashStore {
       }
     } else { // fast reboot from normal shutdown
       if(kLogInfo) std::cout << "[HashStore]: fast reboot from normal shutdown" << std::endl;
+      PinningMap pin;
+      pin.reset_pinning_counter(nid, 0);
       Timer timer;
       timer.start();
       PersistRoot& root = slab_.root();
@@ -300,9 +305,57 @@ class HashStore {
         memcpy(version_, pver, sizeof(uint64_t) * N);
 
         Segment** vdir = new Segment* [count]{};
+
+        // reload all segments in parallel
+        std::vector<std::thread> workers;
+        std::atomic<size_t> loaded{0};
+        std::atomic<size_t> finished{0};
+        for(int tid = 0; tid < nthd; tid++) {
+          workers.push_back(std::thread([&](int tid) {
+            pin.pinning_thread_continuous(pthread_self());
+            DensePointer* kvs = new DensePointer[kNSlot]{};
+            uint8_t* tags = new uint8_t[kNSlot]{};
+            std::deque<void*> psegments;
+            std::unordered_map<Segment**, Segment**> sharing;
+
+            while(true) {
+              size_t sid = loaded.fetch_add(1);
+              if(sid >= count) break;
+
+              auto psegment = (PersistBucket*) pdir[sid].load();
+              size_t depth = psegment->depth; // local depth
+
+              if(sid < (0x01ul << depth)) {
+                psegments.push_back(psegment);
+                Segment* vsegment = new Segment(depth);
+                for(size_t bid = 0; bid < kNBucket; bid++) { // reload all buckets in a segment
+                  PersistBucket& pb = psegment[bid];
+                  Bucket* vb = vsegment->bucket(bid);
+                  for(size_t rid = 0; rid < kNSlot; rid++) {
+                    void* kv = pb.kvs[rid].load();
+                    uint16_t tag = pb.slot_tags[rid];
+                    kvs[rid] = DensePointer(kv, tag);
+                  }
+                  memcpy(tags, pb.bucket_tags, sizeof(uint8_t) * kNSlot);
+                  new(vb) Bucket(pb.bitmap, pb.depth, pb.index, tags, kvs);
+                }
+                vdir[sid] = vsegment;
+              } else { sharing[&vdir[sid]] = &vdir[sid % (0x01ul << depth)]; }
+            }
+            // wait for other threads
+            finished.fetch_add(1);
+            while(finished.load(std::memory_order_acquire) != nthd);
+
+            for(auto pair : sharing) { *pair.first = *pair.second; }
+            for(void* pseg : psegments) { slab_.release(pseg); }
+            delete[] tags, delete[] kvs;
+          }, tid));
+        }
+        for(int tid = 0; tid < nthd; tid++) { workers[tid].join(); }
+
+/*
         DensePointer* kvs = new DensePointer[kNSlot]{};
         uint8_t* tags = new uint8_t[kNSlot]{};
-
         // reload all segments
         for(size_t sid = 0; sid < count; sid++) {
           auto psegment = (PersistBucket*) pdir[sid].load();
@@ -326,7 +379,6 @@ class HashStore {
             vdir[sid] = vsegment;
           } else { vdir[sid] = vdir[sid % (0x01ul << depth)]; }
         }
-
         // release all persistent buckets
         std::unordered_set<void*> released;
         for(size_t sid = 0; sid < count; sid++) {
@@ -336,11 +388,13 @@ class HashStore {
             released.insert(psegment);
           }
         }
+*/
 
         HashTable table(head->depth, vdir);
         index_.swap(table);
 
-        delete[] tags, delete[] kvs, delete[] vdir;
+//        delete[] tags, delete[] kvs;
+        delete[] vdir;
         slab_.release(pdir), slab_.release(pver), slab_.release(head);
       }
       long rdrt = timer.duration_us();
