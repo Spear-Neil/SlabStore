@@ -170,8 +170,14 @@ class HashStore {
     // destroy thread local limbo list first
     for(auto accessor : tsd_) { delete accessor.second; }
     // unload in-memory structure to persistent memory for fast reboot
+    size_t dir_size = sizeof(pptr64_t) * index_.directory_size();
+    // max size 4MB, split directory into multiple blocks if larger than 4MiB
+    if(dir_size >= 4 * 1024 * 1024) {
+      std::cerr << "Currently, not supported directory size larger than 4MiB" << std::endl;
+      exit(-1);
+    }
     auto head = slab_.acquire(sizeof(PersistHead));
-    auto pdir = slab_.acquire(sizeof(pptr64_t) * index_.directory_size());
+    auto pdir = slab_.acquire(dir_size);
     auto pver = slab_.acquire(sizeof(uint64_t) * N);
 
     bool reclaim = tomb_size_ > kReclaimTomb; // whether to reclaim tombstone
