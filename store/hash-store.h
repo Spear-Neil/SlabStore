@@ -20,6 +20,9 @@
 #include <thread>
 #include <unordered_map>
 
+#include <sys/time.h>
+#include <sys/resource.h>
+
 #include "timer.h"
 #include "hash-table.h"
 #include "kv-type.h"
@@ -258,6 +261,12 @@ class HashStore {
     if(kLogInfo) std::cout << "[HashStore]: slab allocator open elapsed time: " << drt << " microseconds" << std::endl;
     if(!slab_.good()) { // recover from power failure or system crashes
       if(kLogInfo) std::cout << "[HashStore]: recover from abnormal crashes" << std::endl;
+      struct rusage before{}, after{};
+      int res = getrusage(RUSAGE_SELF, &before);
+      if(res != 0) {
+        std::cerr << "[ERROR]: getrusage unknown error!" << std::endl;
+        exit(-1);
+      }
       timer.start();
       slab_.recover([&](region_t obj) {
         if(obj.mode()) { // kv object
@@ -291,15 +300,31 @@ class HashStore {
         }
       }, nthd, nid);
       long rdrt = timer.duration_us();
+      res = getrusage(RUSAGE_SELF, &after);
+      if(res != 0) {
+        std::cerr << "[ERROR]: getrusage unknown error!" << std::endl;
+        exit(-1);
+      }
       if(kLogInfo) {
-        std::cout << "[HashStore]: recover elapsed time: " << rdrt << " microseconds" << std::endl;
-        std::cout << "[HashStore]: total open/recover elapsed time: " << drt + rdrt << " microseconds" << std::endl;
+        size_t user_time = after.ru_utime.tv_sec * 1'000'000 + after.ru_utime.tv_usec;
+        user_time -= before.ru_utime.tv_sec * 1'000'000 + before.ru_utime.tv_usec;
+        size_t sys_time = after.ru_stime.tv_sec * 1'000'000 + after.ru_stime.tv_usec;
+        sys_time -= before.ru_stime.tv_sec * 1'000'000 + before.ru_stime.tv_usec;
+        std::cout << "[HashStore]: recover total user CPU time: " << user_time << " microseconds" << std::endl;
+        std::cout << "[HashStore]: recover total sys CPU time: " << sys_time << " microseconds" << std::endl;
+        std::cout << "[HashStore]: recover elapsed real time: " << rdrt << " microseconds" << std::endl;
+        std::cout << "[HashStore]: total open/recover elapsed real time: " << drt + rdrt << " microseconds" << std::endl;
       }
     } else { // fast reboot from normal shutdown
       if(kLogInfo) std::cout << "[HashStore]: fast reboot from normal shutdown" << std::endl;
       PinningMap pin;
       pin.reset_pinning_counter(nid, 0);
-      Timer timer;
+      struct rusage before{}, after{};
+      int res = getrusage(RUSAGE_SELF, &before);
+      if(res != 0) {
+        std::cerr << "[ERROR]: getrusage unknown error!" << std::endl;
+        exit(-1);
+      }
       timer.start();
       PersistRoot& root = slab_.root();
       if(root[0].load() != nullptr) {
@@ -404,9 +429,20 @@ class HashStore {
         slab_.release(pdir), slab_.release(pver), slab_.release(head);
       }
       long rdrt = timer.duration_us();
+      res = getrusage(RUSAGE_SELF, &after);
+      if(res != 0) {
+        std::cerr << "[ERROR]: getrusage unknown error!" << std::endl;
+        exit(-1);
+      }
       if(kLogInfo) {
-        std::cout << "[HashStore]: reboot elapsed time: " << rdrt << " microseconds" << std::endl;
-        std::cout << "[HashStore]: total open/recover elapsed time: " << drt + rdrt << " microseconds" << std::endl;
+        size_t user_time = after.ru_utime.tv_sec * 1'000'000 + after.ru_utime.tv_usec;
+        user_time -= before.ru_utime.tv_sec * 1'000'000 + before.ru_utime.tv_usec;
+        size_t sys_time = after.ru_stime.tv_sec * 1'000'000 + after.ru_stime.tv_usec;
+        sys_time -= before.ru_stime.tv_sec * 1'000'000 + before.ru_stime.tv_usec;
+        std::cout << "[HashStore]: reboot total user CPU time: " << user_time << " microseconds" << std::endl;
+        std::cout << "[HashStore]: reboot total sys CPU time: " << sys_time << " microseconds" << std::endl;
+        std::cout << "[HashStore]: reboot elapsed real time: " << rdrt << " microseconds" << std::endl;
+        std::cout << "[HashStore]: total open/recover elapsed real time: " << drt + rdrt << " microseconds" << std::endl;
       }
     }
     slab_.root()[0].store(nullptr);
