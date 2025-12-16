@@ -8,6 +8,7 @@ from matplotlib import gridspec
 from matplotlib.ticker import FormatStrFormatter
 from matplotlib.gridspec import GridSpec
 from matplotlib.ticker import MaxNLocator
+from matplotlib.patches import Patch
 
 # global parameters
 log_dir = "./logs/"
@@ -76,7 +77,7 @@ def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
     remove_path("/mnt/pmem0/pibench")
 
     # figure throughput
-    fig = plt.figure(figsize=(10, 7.5))
+    fig = plt.figure(figsize=(9.5, 7.5))
     row, col = 2, 2
     for rid in range(row):
         for cid in range(col):
@@ -345,7 +346,7 @@ def figure_ycsb_access(key_size, val_size):
     fig = plt.figure(figsize=(10, 4))
     wide, narrow = -0.1, -0.08
     width = [1, narrow, 1, narrow, 1, narrow, 1]
-    gs = gridspec.GridSpec(row, col * 2 - 1, figure=fig, width_ratios=width)
+    gs = GridSpec(row, col * 2 - 1, figure=fig, width_ratios=width)
 
     y_max = [0, 0]
     slabstore_media_writes = []
@@ -468,6 +469,184 @@ def figure_ycsb_insert():
     fig.show()
 
 
+def figure_size_sensitivity_and_recovery():
+    sizes = [[8, 8], [16, 32], [32, 64], [32, 200], [64, 400], [128, 800]]
+    store_path = "/mnt/pmem0/ycsb-store"
+    store_size = 484
+    records_num = 200000000
+    read_ratio = 50  # balanced
+    run_drt = 60
+
+    stores = ["pmemkv", "BasicSlabStore", "SlabStore", "Plush", "Viper"]  # , "RocksDB"]
+    colors = ['blue', 'steelblue', 'red', 'orange', 'green', 'purple', 'gray', 'brown']
+    markers = ["o", "X", "d", "s", "^", "v", "P", "*"]
+
+    nthd = 48
+    # size sensitivity
+    for sid in range(len(stores)):
+        for kv_size in sizes:
+            key_size, val_size = kv_size
+            ycsb_size = ["./build/test/test-ycsb-test", store_path, str(store_size),
+                         str(sid), str(nthd), str(records_num), str(key_size), str(val_size),
+                         str(read_ratio), str(run_drt), str(0), str(0), str(nthd), str(pm_script)]
+            log_name = ("ycsb-size-" + str(nthd) + "-" + str(sid) + "-" + str(key_size) + "-" + str(val_size) + ".log")
+            log_path = os.path.join(log_dir, log_name)
+            if not os.path.exists(log_path):
+                remove_path(store_path)
+                result = subprocess.run(ycsb_size, capture_output=True, text=True).stdout
+                with open(log_path, 'w') as log:
+                    log.write(str(ycsb_size) + "\n" + result + "\n\n")
+    remove_path(store_path)
+
+    # configure kNBucketInSegment as 128 for record number 400 million
+    # to prevent directory size from growing larger than 4MiB
+    restart_nums = [100000000, 200000000, 400000000]
+    restart_sizes = [[16, 32], [32, 200], [64, 400]]
+    restart_types = ["recover", "reboot"]  # the order cannot be changed
+
+    # slabstore recovery time
+    for rec_num in restart_nums:
+        for kv_size in restart_sizes:
+            key_size, val_size = kv_size
+            remove_path(store_path)
+            insert_script = ["./build/test/test-ycsb-test", store_path, str(store_size),
+                             str(2), str(nthd), str(rec_num), str(key_size), str(val_size),
+                             str(100), str(0), str(0), str(0), str(nthd), str(pm_script)]
+            exist = True
+            for restart_type in restart_types:
+                log_name = ("ycsb-restart-" + str(rec_num) + "-" + str(key_size) + "-" + str(
+                    val_size) + "-" + restart_type + ".log")
+                log_path = os.path.join(log_dir, log_name)
+                if not os.path.exists(log_path): exist = False
+            if not exist: subprocess.run(insert_script, capture_output=True, text=True)
+
+            for restart_type in restart_types:
+                restart_script = ["./build/test/test-ycsb-restart", store_path]
+                log_name = ("ycsb-restart-" + str(rec_num) + "-" + str(key_size) + "-" + str(
+                    val_size) + "-" + restart_type + ".log")
+                log_path = os.path.join(log_dir, log_name)
+                if not os.path.exists(log_path):
+                    result = subprocess.run(restart_script, capture_output=True, text=True).stdout
+                    with open(log_path, 'w') as log:
+                        log.write(str(restart_script) + "\n" + result + "\n\n")
+    remove_path(store_path)
+
+    fig = plt.figure(figsize=(11, 6))
+    gs = GridSpec(3, 3, figure=fig, height_ratios=[1, -0.1, 1], width_ratios=[1, -0.1, 1])
+
+    left = fig.add_subplot(gs[:, 0])
+    # throughput of YCSB Balance workload under different record sizes
+    for sid in range(len(stores)):
+        perf = []
+        for kv_size in sizes:
+            key_size, val_size = kv_size
+            log_name = ("ycsb-size-" + str(nthd) + "-" + str(sid) + "-" + str(key_size) + "-" + str(val_size) + ".log")
+            log_path = os.path.join(log_dir, log_name)
+            with open(log_path) as log:
+                result = log.read()
+                if not result: exit("unknown error, " + log_name)
+                match = re.search(r"run phase.*throughput:\s*([\d.]+)", result)
+                if not match: exit("unknown error, match failed")
+                perf.append(float(match.group(1)))
+        xticks = [str(item) for item in sizes]
+        left.plot(xticks, perf, label=stores[sid], marker=markers[sid], color=colors[sid],
+                  linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
+        left.set_ylabel('Million Operations per Second', fontsize=12)
+        left.set_title('(a) Throughput of YCSB Balanced workload.', x=0.5, y=-0.15, fontsize=12)
+
+    x_labels = ["100 million", "200 million", "400 million"]
+    size_colors = ['darkgreen', 'steelblue', 'slateblue']
+    # slabstore reboot time
+    right_top = fig.add_subplot(gs[0, 2])
+    width, interval, offset = 0.23, 0.02, 0
+    color_id = 0
+    xticks = np.arange(len(restart_nums))
+    for kv_size in restart_sizes:
+        key_size, val_size = kv_size
+        real_time, user_time, sys_time = [], [], []
+        for rec_num in restart_nums:
+            log_name = ("ycsb-restart-" + str(rec_num) + "-" + str(key_size) + "-" + str(
+                val_size) + "-" + "reboot" + ".log")
+            log_path = os.path.join(log_dir, log_name)
+            with open(log_path) as log:
+                result = log.read()
+                if not result: exit("unknown error, " + log_name)
+                match = re.search(r"reboot elapsed real time:\s*(\d+)\s*microseconds", result)
+                if not match: exit("unknown error, match failed")
+                real_time.append(float(match.group(1)) / 1000000)
+                match = re.search(r"reboot total user CPU time:\s*(\d+)\s*microseconds", result)
+                if not match: exit("unknown error, match failed")
+                user_time.append(float(match.group(1)))
+                match = re.search(r"reboot total sys CPU time:\s*(\d+)\s*microseconds", result)
+                if not match: exit("unknown error, match failed")
+                sys_time.append(float(match.group(1)))
+        total_time = [user_time[idx] + sys_time[idx] for idx in range(len(restart_nums))]
+        real_user_time = [real_time[idx] * user_time[idx] / total_time[idx] for idx in range(len(restart_nums))]
+        real_sys_time = [real_time[idx] * sys_time[idx] / total_time[idx] for idx in range(len(restart_nums))]
+
+        right_top.bar(xticks + offset, real_sys_time, width=width, label="kernel time", color='red')
+        right_top.bar(xticks + offset, real_user_time, width=width, bottom=real_sys_time, hatch='x',
+                      label=str(kv_size) + " user time", color=size_colors[color_id])
+        offset += width + interval
+        color_id += 1
+
+    right_top.set_xticks(xticks + width, x_labels, fontsize=12)
+    right_top.set_ylabel('Fast reboot time (sec)', fontsize=12)
+    legends = [Patch(facecolor=size_colors[idx], edgecolor='black', hatch='x', alpha=1,
+                     label=str(restart_sizes[idx]) + " user time")
+               for idx in range(len(restart_sizes))]
+    legends.append(Patch(facecolor='red', edgecolor='black', alpha=1, label="kernel time"))
+    right_top.legend(handles=legends, loc='upper left', ncol=1, fontsize=11)
+
+    # slabstore recover time
+    right_bottom = fig.add_subplot(gs[2, 2])
+    width, interval, offset = 0.23, 0.02, 0
+    color_id = 0
+    xticks = np.arange(len(restart_nums))
+    for kv_size in restart_sizes:
+        key_size, val_size = kv_size
+        real_time, user_time, sys_time = [], [], []
+        for rec_num in restart_nums:
+            log_name = ("ycsb-restart-" + str(rec_num) + "-" + str(key_size) + "-" + str(
+                val_size) + "-" + "recover" + ".log")
+            log_path = os.path.join(log_dir, log_name)
+            with open(log_path) as log:
+                result = log.read()
+                if not result: exit("unknown error, " + log_name)
+                match = re.search(r"recover elapsed real time:\s*(\d+)\s*microseconds", result)
+                if not match: exit("unknown error, match failed")
+                real_time.append(float(match.group(1)) / 1000000)
+                match = re.search(r"recover total user CPU time:\s*(\d+)\s*microseconds", result)
+                if not match: exit("unknown error, match failed")
+                user_time.append(float(match.group(1)))
+                match = re.search(r"recover total sys CPU time:\s*(\d+)\s*microseconds", result)
+                if not match: exit("unknown error, match failed")
+                sys_time.append(float(match.group(1)))
+        total_time = [user_time[idx] + sys_time[idx] for idx in range(len(restart_nums))]
+        real_user_time = [real_time[idx] * user_time[idx] / total_time[idx] for idx in range(len(restart_nums))]
+        real_sys_time = [real_time[idx] * sys_time[idx] / total_time[idx] for idx in range(len(restart_nums))]
+
+        right_bottom.bar(xticks + offset, real_sys_time, width=width, label="kernel time", color='red')
+        right_bottom.bar(xticks + offset, real_user_time, width=width, bottom=real_sys_time, hatch='x',
+                         label=str(kv_size) + " user time", color=size_colors[color_id])
+        offset += width + interval
+        color_id += 1
+
+    right_bottom.set_xticks(xticks + width, x_labels, fontsize=12)
+    right_bottom.set_ylabel('Recovery time (sec)', fontsize=12)
+    # right_bottom.set_xlabel('Records number', loc="right", fontsize=12)
+    legends = [Patch(facecolor=size_colors[idx], edgecolor='black', hatch='x', alpha=1,
+                     label=str(restart_sizes[idx]) + " user time")
+               for idx in range(len(restart_sizes))]
+    legends.append(Patch(facecolor='red', edgecolor='black', alpha=1, label="kernel time"))
+    right_bottom.legend(handles=legends, loc='upper left', ncol=1, fontsize=11)
+    right_bottom.set_title('(b) Fast reboot and recovery time.', x=0.5, y=-0.35, fontsize=12)
+
+    fig.tight_layout()
+    fig.savefig("size-and-recover.pdf", bbox_inches='tight')
+    fig.show()
+
+
 if __name__ == "__main__":
     build_project()
 
@@ -490,3 +669,5 @@ if __name__ == "__main__":
 
     figure_ycsb_access(8, 32)
     figure_ycsb_access(32, 200)
+
+    figure_size_sensitivity_and_recovery()
