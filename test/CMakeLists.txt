@@ -66,7 +66,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-long-long -fPIC -march=native")
 set(PMDK_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/pmdk")
 ExternalProject_Add(PMDK
         GIT_REPOSITORY https://gitee.com/spearNeil/pmdk-addr-patch.git
-#        GIT_REPOSITORY git@gitee.com:spearNeil/pmdk-addr-patch.git
+        #        GIT_REPOSITORY git@gitee.com:spearNeil/pmdk-addr-patch.git
         GIT_TAG addr-patch
         BUILD_IN_SOURCE 1
         BUILD_COMMAND $(MAKE) EXTRA_CFLAGS=-Wno-error
@@ -80,7 +80,7 @@ ExternalProject_Add(PMDK
 FetchContent_Declare(
         epoch_reclaimer
         GIT_REPOSITORY https://gitee.com/spearNeil/epoch-reclaimer.git
-#        GIT_REPOSITORY git@gitee.com:spearNeil/epoch-reclaimer.git
+        #        GIT_REPOSITORY git@gitee.com:spearNeil/epoch-reclaimer.git
         GIT_TAG master
 )
 if (NOT epoch_reclaimer_POPULATED)
@@ -138,6 +138,7 @@ target_link_libraries(pibench-lbtree liblbtree)
 set(CMAKE_CXX_STANDARD 20)
 add_library(pibench-slabstore SHARED libs/libslabstore.cpp)
 add_library(pibench-slabstore-var SHARED libs/libslabstore.cpp)
+add_library(pibench-basic-slabstore-var SHARED libs/libbasic-slabstore.cpp)
 
 add_library(pibench-viper SHARED libs/libviper.cpp)
 add_library(pibench-viper-var SHARED libs/libviper-var.cpp)
