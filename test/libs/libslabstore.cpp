@@ -18,9 +18,9 @@ class SlabStoreWrapper : public tree_api {
   }
 
  public:
-  SlabStoreWrapper() {
+  SlabStoreWrapper(size_t size) {
     const std::string path = "/mnt/pmem0/pibench/slabstore";
-    const size_t size = (0x01ul << 30) * 100;
+    if(size == 0) size = (0x01ul << 30) * 100;
     db = new DB();
     db->open(path, size);
   }
@@ -59,5 +59,5 @@ class SlabStoreWrapper : public tree_api {
 };
 
 extern "C" tree_api* create_tree(const tree_options_t& opt) {
-  return new SlabStoreWrapper();
+  return new SlabStoreWrapper(opt.pool_size);
 }

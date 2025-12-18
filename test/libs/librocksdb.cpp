@@ -8,9 +8,9 @@ class RocksDBWrapper : public tree_api {
   rocksdb::DB* db;
 
  public:
-  RocksDBWrapper() : db(nullptr) {
+  RocksDBWrapper(size_t size) : db(nullptr) {
     const std::string path = "/mnt/pmem0/pibench/rocksdb";
-    const size_t size = (0x01ul << 30) * 100;
+    if(size == 0) size = (0x01ul << 30) * 100;
 
     rocksdb::Options options;
     options.create_if_missing = true;
@@ -75,5 +75,5 @@ class RocksDBWrapper : public tree_api {
 };
 
 extern "C" tree_api* create_tree(const tree_options_t& opt) {
-  return new RocksDBWrapper();
+  return new RocksDBWrapper(opt.pool_size);
 }

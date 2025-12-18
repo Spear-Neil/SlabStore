@@ -23,9 +23,9 @@ class ViperWrapper : public tree_api {
   }
 
  public:
-  ViperWrapper() {
+  ViperWrapper(size_t size) {
     const std::string path = "/mnt/pmem0/pibench/viper";
-    const size_t size = (0x01ul << 30) * 100;
+    if(size == 0) size = (0x01ul << 30) * 100;
     viper::ViperConfig config{.enable_reclamation = true};
     db_ = DB::create(path, size, config);
   }
@@ -54,8 +54,10 @@ class ViperWrapper : public tree_api {
   int scan(const char* key, size_t key_sz, int scan_sz, char*& values_out) override {
     return 0;
   }
+
+  size_t get_size() override { return get_client().get_total_inuse_pmem(); }
 };
 
 extern "C" tree_api* create_tree(const tree_options_t& opt) {
-  return new ViperWrapper();
+  return new ViperWrapper(opt.pool_size);
 }
