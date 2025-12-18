@@ -431,6 +431,11 @@ class AllocatorDetail {
     ThreadCache& tcache = thread_cache();
     return tcache.region_size(ptr);
   }
+
+  /**
+   * @brief used extents size, including free extents
+   * */
+  size_t used_size() const { return ext_case_->used_size(); }
 };
 
 
@@ -490,6 +495,8 @@ class Allocator {
   void release(void* ptr) { alloc_->release(ptr); }
 
   size_t region_size(void* ptr) { return alloc_->region_size(ptr); }
+
+  size_t used_size() const { return alloc_->used_size(); }
 };
 
 }

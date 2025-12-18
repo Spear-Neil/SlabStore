@@ -54,6 +54,8 @@ class SlabStoreWrapper : public tree_api {
   int scan(const char* key, size_t key_sz, int scan_sz, char*& values_out) override {
     return 0;
   }
+
+  size_t get_size() override { return db->used_pm_size(); }
 };
 
 extern "C" tree_api* create_tree(const tree_options_t& opt) {

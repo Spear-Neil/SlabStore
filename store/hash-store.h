@@ -313,7 +313,8 @@ class HashStore {
         std::cout << "[HashStore]: recover total user CPU time: " << user_time << " microseconds" << std::endl;
         std::cout << "[HashStore]: recover total sys CPU time: " << sys_time << " microseconds" << std::endl;
         std::cout << "[HashStore]: recover elapsed real time: " << rdrt << " microseconds" << std::endl;
-        std::cout << "[HashStore]: total open/recover elapsed real time: " << drt + rdrt << " microseconds" << std::endl;
+        std::cout << "[HashStore]: total open/recover elapsed real time: " << drt + rdrt << " microseconds"
+                  << std::endl;
       }
     } else { // fast reboot from normal shutdown
       if(kLogInfo) std::cout << "[HashStore]: fast reboot from normal shutdown" << std::endl;
@@ -442,7 +443,8 @@ class HashStore {
         std::cout << "[HashStore]: reboot total user CPU time: " << user_time << " microseconds" << std::endl;
         std::cout << "[HashStore]: reboot total sys CPU time: " << sys_time << " microseconds" << std::endl;
         std::cout << "[HashStore]: reboot elapsed real time: " << rdrt << " microseconds" << std::endl;
-        std::cout << "[HashStore]: total open/recover elapsed real time: " << drt + rdrt << " microseconds" << std::endl;
+        std::cout << "[HashStore]: total open/recover elapsed real time: " << drt + rdrt << " microseconds"
+                  << std::endl;
       }
     }
     slab_.root()[0].store(nullptr);
@@ -608,6 +610,11 @@ class HashStore {
    * @brief number of kv pairs (including tombstone), thread-unsafe
    * */
   size_t size() { return index_.size(); }
+
+  /**
+   * @brief used extents size, including free extents
+   * */
+  size_t used_pm_size() const { return slab_.used_size(); }
 };
 
 }

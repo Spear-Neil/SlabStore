@@ -18,7 +18,7 @@ class PlushWrapper : public tree_api {
       std::cerr << "[ERROR]: Plush, failed to create dir" << std::endl;
       exit(-1);
     }
-    db = new DB(path, true);
+    db = new DB(path, true, true, 0.4);
   }
 
   ~PlushWrapper() override = default;

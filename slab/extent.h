@@ -248,6 +248,11 @@ class ExtentCase {
    * @brief persistent root
    * */
   PersistRoot& root() { return extent_.root(); }
+
+  /**
+   * @brief used extents size, including free extents
+   * */
+  size_t used_size() const { return meta_.head().count() * kExtentSize; }
 };
 
 }

@@ -37,7 +37,7 @@ public:
 
     /**
      * @brief Lookup record with given key.
-     * 
+     *
      * @param[in] key Pointer to beginning of key.
      * @param[in] sz Size of key in bytes.
      * @param[out] value_out Buffer to fill with value.
@@ -48,7 +48,7 @@ public:
 
     /**
      * @brief Insert a record with given key and value.
-     * 
+     *
      * @param key Pointer to beginning of key.
      * @param key_sz Size of key in bytes.
      * @param value Pointer to beginning of value.
@@ -60,7 +60,7 @@ public:
 
     /**
      * @brief Update the record with given key with the new given value.
-     * 
+     *
      * @param key Pointer to beginning of key.
      * @param key_sz Size of key in bytes.
      * @param value Pointer to beginning of new value.
@@ -72,7 +72,7 @@ public:
 
     /**
      * @brief Remove the record with the given key.
-     * 
+     *
      * @param key Pointer to the beginning of key.
      * @param key_sz Size of key in bytes.
      * @return true if key was successfully removed.
@@ -111,6 +111,8 @@ public:
      * return scanned;
      */
     virtual int scan(const char* key, size_t key_sz, int scan_sz, char*& values_out) = 0;
+
+    virtual size_t get_size() { return 0; }
 };
 
 #endif

@@ -147,8 +147,10 @@ target_include_directories(pibench-viper-var PRIVATE concurrentqueue)
 
 add_library(pibench-plush SHARED libs/libplush.cpp)
 add_library(pibench-plush-var SHARED libs/libplush-var.cpp)
+add_library(pibench-plush-compact-var SHARED libs/libplush-compact-var.cpp)
 target_link_libraries(pibench-plush plush)
 target_link_libraries(pibench-plush-var plush)
+target_link_libraries(pibench-plush-compact-var plush)
 
 add_library(pibench-pmemkv SHARED libs/libpmemkv.cpp)
 add_library(pibench-pmemkv-var SHARED libs/libpmemkv.cpp)
