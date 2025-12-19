@@ -554,6 +554,8 @@ def figure_size_sensitivity_and_recovery():
         left.set_ylabel('Million Operations per Second', fontsize=12)
         left.set_title('(a) Throughput of YCSB Balanced workload.', x=0.5, y=-0.15, fontsize=12)
 
+    left.legend(loc='upper right', ncol=1, fontsize=12)
+
     x_labels = ["100 million", "200 million", "400 million"]
     size_colors = ['darkgreen', 'steelblue', 'slateblue']
     # slabstore reboot time
@@ -584,7 +586,7 @@ def figure_size_sensitivity_and_recovery():
         real_user_time = [real_time[idx] * user_time[idx] / total_time[idx] for idx in range(len(restart_nums))]
         real_sys_time = [real_time[idx] * sys_time[idx] / total_time[idx] for idx in range(len(restart_nums))]
 
-        right_top.bar(xticks + offset, real_sys_time, width=width, label="kernel time", color='red')
+        right_top.bar(xticks + offset, real_sys_time, width=width, label="kernel time", color='firebrick')
         right_top.bar(xticks + offset, real_user_time, width=width, bottom=real_sys_time, hatch='x',
                       label=str(kv_size) + " user time", color=size_colors[color_id])
         offset += width + interval
@@ -595,7 +597,7 @@ def figure_size_sensitivity_and_recovery():
     legends = [Patch(facecolor=size_colors[idx], edgecolor='black', hatch='x', alpha=1,
                      label=str(restart_sizes[idx]) + " user time")
                for idx in range(len(restart_sizes))]
-    legends.append(Patch(facecolor='red', edgecolor='black', alpha=1, label="kernel time"))
+    legends.append(Patch(facecolor='firebrick', edgecolor='black', alpha=1, label="sys (kernel) time"))
     right_top.legend(handles=legends, loc='upper left', ncol=1, fontsize=11)
 
     # slabstore recover time
@@ -626,7 +628,7 @@ def figure_size_sensitivity_and_recovery():
         real_user_time = [real_time[idx] * user_time[idx] / total_time[idx] for idx in range(len(restart_nums))]
         real_sys_time = [real_time[idx] * sys_time[idx] / total_time[idx] for idx in range(len(restart_nums))]
 
-        right_bottom.bar(xticks + offset, real_sys_time, width=width, label="kernel time", color='red')
+        right_bottom.bar(xticks + offset, real_sys_time, width=width, label="kernel time", color='firebrick')
         right_bottom.bar(xticks + offset, real_user_time, width=width, bottom=real_sys_time, hatch='x',
                          label=str(kv_size) + " user time", color=size_colors[color_id])
         offset += width + interval
@@ -638,12 +640,119 @@ def figure_size_sensitivity_and_recovery():
     legends = [Patch(facecolor=size_colors[idx], edgecolor='black', hatch='x', alpha=1,
                      label=str(restart_sizes[idx]) + " user time")
                for idx in range(len(restart_sizes))]
-    legends.append(Patch(facecolor='red', edgecolor='black', alpha=1, label="kernel time"))
+    legends.append(Patch(facecolor='firebrick', edgecolor='black', alpha=1, label="sys (kernel) time"))
     right_bottom.legend(handles=legends, loc='upper left', ncol=1, fontsize=11)
     right_bottom.set_title('(b) Fast reboot and recovery time.', x=0.5, y=-0.35, fontsize=12)
 
     fig.tight_layout()
     fig.savefig("size-and-recover.pdf", bbox_inches='tight')
+    fig.show()
+
+
+def figure_throughput_and_space_over_time():
+    stores = ["pmemkv", "BasicSlabStore", "SlabStore", "Plush", "Viper", "Plush-Payload-Compact"]  # , "RocksDB"]
+    colors = ['blue', 'steelblue', 'red', 'orange', 'green', 'tomato', 'gray', 'brown']
+    markers = ["o", "X", "d", "s", "^", "v", "P", "*"]
+    libs = ["pmemkv-var", "basic-slabstore-var", "slabstore-var", "plush-var", "viper-var", "plush-compact-var"]
+
+    nthd = 48
+    record_count = 200000000
+    run_duration = 240
+    pool_size = 484 * 1024 * 1024 * 1024
+    key_size, val_size = 8, 32
+    # run throughput over time, update only
+    for lib in libs:
+        input_lib = "./build/test/libpibench-" + lib + ".so"
+        pibench = ["./build/test/PiBench", input_lib, "-n", str(record_count), "-r", "0", "-u", "1",
+                   "-t", str(nthd), "-m", "time", "--seconds", str(run_duration), "--pool_size", str(pool_size),
+                   "--key_size", str(key_size), "--value_size", str(val_size), "--script", str(pm_script)]
+        log_name = ('throughput-over-time-' + lib + '-' + str(nthd) + '-' + str(key_size)
+                    + '-' + str(val_size) + '-' + str(run_duration) + '.log')
+        log_path = os.path.join(log_dir, log_name)
+        if not os.path.exists(log_path):
+            remove_path("/mnt/pmem0/pibench")
+            os.mkdir("/mnt/pmem0/pibench")
+            result = subprocess.run(pibench, capture_output=True, text=True).stdout
+            with open(log_path, "w") as log:
+                log.write(str(pibench) + "\n" + result)
+    remove_path("/mnt/pmem0/pibench")
+
+    hundred_million = 100000000
+    counts = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16, 20]
+
+    for lib in libs:
+        input_lib = "./build/test/libpibench-" + lib + ".so"
+        for count in counts:
+            op_count = count * hundred_million
+            pibench = ["./build/test/PiBench", input_lib, "-n", str(record_count), "-r", "0", "-u", "1",
+                       "-p", str(op_count), "-t", str(nthd), "--pool_size", str(pool_size), "--get_size",
+                       "--key_size", str(key_size), "--value_size", str(val_size), "--script", str(pm_script)]
+            log_name = ('space-over-operation-' + lib + '-' + str(nthd) + '-' + str(key_size)
+                        + '-' + str(val_size) + '-' + str(count) + '.log')
+            log_path = os.path.join(log_dir, log_name)
+            if not os.path.exists(log_path):
+                remove_path("/mnt/pmem0/pibench")
+                os.mkdir("/mnt/pmem0/pibench")
+                result = subprocess.run(pibench, capture_output=True, text=True).stdout
+                pmempool_info = ""
+                if lib == "pmemkv-var":
+                    pmempool = ['pmempool', 'info', '-s', '/mnt/pmem0/pibench/pmemkv']
+                    pmempool_info = subprocess.run(pmempool, capture_output=True, text=True).stdout
+                with open(log_path, "w") as log:
+                    log.write(str(pibench) + "\n" + result + "\n" + pmempool_info)
+    remove_path("/mnt/pmem0/pibench")
+
+    fig, axes = plt.subplots(2, 1, figsize=(10, 5))
+    # throughput over time
+    xticks = np.arange(run_duration)
+    for sid in range(len(stores)):
+        log_name = ('throughput-over-time-' + libs[sid] + '-' + str(nthd) + '-' + str(key_size)
+                    + '-' + str(val_size) + '-' + str(run_duration) + '.log')
+        log_path = os.path.join(log_dir, log_name)
+        perf = []
+        with open(log_path) as log:
+            result = log.read()
+            if not result: exit("unknown error, " + log_name)
+            res = re.findall(r"^[\s\t]*([\d.]+)", result, re.MULTILINE)
+            if len(res) != run_duration: exit("sampling unknown error, " + str(len(res)) + ', ' + log_name)
+            for r in res: perf.append(float(r) / 1000000)
+        axes[0].plot(xticks[1:], perf[1:], label=stores[sid], marker=markers[sid], color=colors[sid],
+                     linewidth=3, markersize=5, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
+    axes[0].set_ylabel('Throughput (Mops/s)', fontsize=12)
+    axes[0].set_xlabel('Time (sec)', loc="right", fontsize=12)
+    axes[0].set_xlim(-1, run_duration + 1)
+    axes[0].set_title('(a) Throughput of Write-Only workload over time.', y=-0.35, fontsize=12)
+
+    # space over update operations
+    for sid in range(len(stores)):
+        space = []
+        for count in counts:
+            log_name = ('space-over-operation-' + libs[sid] + '-' + str(nthd) + '-' + str(key_size)
+                        + '-' + str(val_size) + '-' + str(count) + '.log')
+            log_path = os.path.join(log_dir, log_name)
+            with open(log_path) as log:
+                result = log.read()
+                if not result: exit("unknown error, " + log_name)
+                if libs[sid] == "pmemkv-var":
+                    match = re.search(r"^Total used bytes[\s\t]*:[\s\t]*(\d+)", result, re.MULTILINE)
+                    if not match: exit("unknown error, match failed")
+                    space.append(float(match.group(1)) / (1024 * 1024 * 1024))
+                else:
+                    match = re.search(r"^PMem footprint \(bytes\):\s*(\d+)", result, re.MULTILINE)
+                    if not match: exit("unknown error, match failed")
+                    space.append(float(match.group(1)) / (1024 * 1024 * 1024))
+        axes[1].plot(counts, space, label=stores[sid], marker=markers[sid], color=colors[sid],
+                     linewidth=3, markersize=10, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
+    axes[1].set_ylabel('PMem footprint (GiB)', fontsize=12)
+    axes[1].set_xlabel('Hundred million operations', loc="right", fontsize=12)
+    axes[1].set_xlim(-0.3, counts[-1] + 0.3)
+    axes[1].set_xticks(counts)
+    axes[1].set_title('(b) PMem footprint over update operation counts.', y=-0.35, fontsize=12)
+
+    fig.tight_layout()
+    lines, labels = fig.axes[-1].get_legend_handles_labels()
+    fig.legend(lines, labels, loc='upper center', ncol=len(stores), bbox_to_anchor=(0.5, 1.08), fontsize=11)
+    fig.savefig("tpt-and-space-over-time.pdf", bbox_inches='tight')
     fig.show()
 
 
@@ -671,3 +780,5 @@ if __name__ == "__main__":
     figure_ycsb_access(32, 200)
 
     figure_size_sensitivity_and_recovery()
+
+    figure_throughput_and_space_over_time()
