@@ -587,7 +587,7 @@ def figure_size_sensitivity_and_recovery():
         real_sys_time = [real_time[idx] * sys_time[idx] / total_time[idx] for idx in range(len(restart_nums))]
 
         right_top.bar(xticks + offset, real_sys_time, width=width, label="kernel time", color='firebrick')
-        right_top.bar(xticks + offset, real_user_time, width=width, bottom=real_sys_time, hatch='x',
+        right_top.bar(xticks + offset, real_user_time, width=width, bottom=real_sys_time, hatch='x', alpha=1,
                       label=str(kv_size) + " user time", color=size_colors[color_id])
         offset += width + interval
         color_id += 1
@@ -629,7 +629,7 @@ def figure_size_sensitivity_and_recovery():
         real_sys_time = [real_time[idx] * sys_time[idx] / total_time[idx] for idx in range(len(restart_nums))]
 
         right_bottom.bar(xticks + offset, real_sys_time, width=width, label="kernel time", color='firebrick')
-        right_bottom.bar(xticks + offset, real_user_time, width=width, bottom=real_sys_time, hatch='x',
+        right_bottom.bar(xticks + offset, real_user_time, width=width, bottom=real_sys_time, hatch='x', alpha=1,
                          label=str(kv_size) + " user time", color=size_colors[color_id])
         offset += width + interval
         color_id += 1
@@ -747,7 +747,7 @@ def figure_throughput_and_space_over_time():
     axes[1].set_xlabel('Hundred million operations', loc="right", fontsize=12)
     axes[1].set_xlim(-0.3, counts[-1] + 0.3)
     axes[1].set_xticks(counts)
-    axes[1].set_title('(b) PMem footprint over update operation counts.', y=-0.35, fontsize=12)
+    axes[1].set_title('(b) PMem footprint over the number of updates.', y=-0.35, fontsize=12)
 
     fig.tight_layout()
     lines, labels = fig.axes[-1].get_legend_handles_labels()
