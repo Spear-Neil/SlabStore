@@ -1,11 +1,11 @@
 # SlabStore: A Write-Optimized and Space-Efficient Key-Value Store for Persistent Memory
 SlabStore is a DRAM-PMem hybrid key-value store based on a tailored slab PMem allocator. The index structure resides in
 volatile memory, and it maintains only records on PMem. For space-efficiency, it employs a slab allocation strategy like
-jemalloc and maintains selective persistence merely for allocator metadata. Given that random small writes on PMem induced 
-by frequent allocation/de-allocation are highly expensive (a single bit flipping in the bitmap triggers a 256-byte PMem 
-media write), we also propose a write-coalescing technique that enables log-free reuse of garbage records/objects without
-additional write overhead. This is enabled by integrating a valid bit flag within the record layout that coordinates with
-both the PMem allocator and MVCC versioning system. We don't releasing garbage objects to the PMem allocator; instead,
+jemalloc and maintains selective persistence merely for allocator's core metadata. Given that random small writes on PMem
+induced by frequent allocation/de-allocation are highly expensive (a single bit flipping in the bitmap triggers a 256-byte
+PMem media write), we also propose a write-coalescing technique that enables log-free reuse of garbage records/objects 
+without additional write overhead. This is enabled by integrating a valid bit flag within the record layout that coordinates
+with both the PMem allocator and MVCC versioning system. We don't releasing garbage objects to the PMem allocator; instead,
 we cache them in thread-local structures for subsequent log-free reuse, which thus eliminates reclamation write cost. These
 garbage records are then reused for incoming updates by using the valid bit to enforce failure atomicity/crash consistency. 
 As the valid bit write and record content writes are spatially local, writes will be combined in hardware buffers and then
