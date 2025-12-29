@@ -1,50 +1,87 @@
 #include <iostream>
 #include <thread>
-#include "util.h"
+#include <string>
+#include "../store/hash-store.h"
+
+constexpr size_t BUF_SIZE = 1024;
+
+util::String& kbuf(std::string_view key) {
+  static thread_local char buf[BUF_SIZE];
+  assert(key.length() + sizeof(util::String) <= sizeof(buf));
+  auto kbuf = (util::String*) buf;
+  kbuf->len = key.length();
+  memcpy(kbuf->str, key.data(), key.length());
+  return *kbuf;
+}
 
 
-using namespace util;
+int main(int argc, char* argv[]) {
+  if(argc < 2) {
+    std::cout << "[Usage]: store path" << std::endl;
+    exit(-1);
+  }
+  std::string path = std::string(argv[1]);
+  size_t store_size = 0x01ul << 30 * 1;
 
-template<typename K, typename V>
-class Demo {
-  typedef util::KVPair<K, V> KVPair;
+  SlabStore::HashStore<util::String> store;
+  store.open(path, store_size);
 
-  KVPair* kv_;
-
- private:
-  uint64_t hash_code_impl(const K& key, std::true_type) {
-    return hash(kv_->key.str, kv_->key.len);
+  /// insert
+  std::cout << "\n\nInsert: " << std::endl;
+  for(size_t kid = 0; kid < 10; kid++) {
+    util::EpochGuard guard(store.get_epoch(), 1);
+    std::string key("key:" + std::to_string(kid));
+    store.upsert(kbuf(key), &kid, 8);
   }
 
-  uint64_t hash_code_impl(const K& key, std::false_type) {
-    return hash(kv_->key);
-  }
-
- public:
-  Demo(KVPair* kv) : kv_(kv) {}
-
-
-  uint64_t hash_code() {
-    if constexpr(std::is_same<K, String>()) {
-      return hash(kv_->key.str, kv_->key.len);
+  for(size_t kid = 0; kid < 10; kid++) {
+    util::EpochGuard guard(store.get_epoch(), 1);
+    std::string key("key:" + std::to_string(kid));
+    auto kv = store.lookup(kbuf(key));
+    if(kv == nullptr) {
+      std::cerr << "[ERROR]: " << key << " not found!" << std::endl;
     } else {
-      return hash(kv_->key);
+      std::cout << "[Lookup]: " << key << ", " << *(uint64_t*) (kv->kv + kv->klen) << std::endl;
     }
-//    return hash_code_impl(kv_->key, std::is_same<K, String>());
   }
-};
 
+  /// update
+  std::cout << "\n\nUpdate: " << std::endl;
+  for(size_t kid = 0; kid < 10; kid++) {
+    util::EpochGuard guard(store.get_epoch(), 1);
+    std::string key("key:" + std::to_string(kid));
+    size_t value = kid + 1;
+    store.upsert(kbuf(key), &value, 8);
+  }
 
-int main() {
-  KVPair<uint64_t, uint64_t> kv{.key=1, .value=2};
-  Demo<uint64_t, uint64_t> demo(&kv);
+  for(size_t kid = 0; kid < 10; kid++) {
+    util::EpochGuard guard(store.get_epoch(), 1);
+    std::string key("key:" + std::to_string(kid));
+    auto kv = store.lookup(kbuf(key));
+    if(kv == nullptr) {
+      std::cerr << "[ERROR]: " << key << " not found!" << std::endl;
+    } else {
+      std::cout << "[Lookup]: " << key << ", " << *(uint64_t*) (kv->kv + kv->klen) << std::endl;
+    }
+  }
 
-  std::cout << demo.hash_code() << std::endl;
-
-  char str[] = "neil";
-  KVPair<String, uint64_t>* skv = KVPair<String, uint64_t>::make_kv(str, 4, 2);
-  Demo<String, uint64_t> sdemo(skv);
-  std::cout << sdemo.hash_code() << std::endl;
+  /// remove
+  std::cout << "\n\nRemove: " << std::endl;
+  for(size_t kid = 0; kid < 10; kid++) {
+    util::EpochGuard guard(store.get_epoch(), 1);
+    std::string key("key:" + std::to_string(kid));
+    store.remove(kbuf(key));
+  }
+  for(size_t kid = 0; kid < 10; kid++) {
+    util::EpochGuard guard(store.get_epoch(), 1);
+    std::string key("key:" + std::to_string(kid));
+    auto kv = store.lookup(kbuf(key));
+    if(kv == nullptr) {
+      std::cout << "[Remove]: " << key << " has been removed!" << std::endl;
+    } else {
+      std::cerr << "[ERROR]: " << key << " has not been properly removed!" << std::endl;
+    }
+  }
 
   return 0;
 }

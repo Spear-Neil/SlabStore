@@ -16,4 +16,4 @@ add_compile_options(-march=native) # -fno-omit-frame-pointer -fopt-info-vec-opti
 
 add_subdirectory(unit)
 add_subdirectory(test)
-add_executable(SlabStore main.cpp)
+add_executable(SlabStore-Example main.cpp)
