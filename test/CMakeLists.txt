@@ -162,3 +162,7 @@ add_dependencies(pibench-rocksdb-var rocksdb)
 target_compile_definitions(pibench-rocksdb-var PUBLIC -DON_DCPMM)
 target_link_libraries(pibench-rocksdb-var ${PROJECT_SOURCE_DIR}/test/pmem-rocksdb/librocksdb.so)
 target_include_directories(pibench-rocksdb-var PRIVATE pmem-rocksdb/include)
+
+########################### mmap hook ###########################
+add_library(mmap-hook SHARED libs/mmap-hook.cpp)
+target_link_libraries(mmap-hook pthread numa)
