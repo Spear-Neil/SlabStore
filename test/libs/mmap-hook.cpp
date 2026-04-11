@@ -182,6 +182,9 @@ static void* pmemkv_mmap(void* addr, size_t length, int prot, int flags, int fd,
         if(res < 0) {
           tiny_fprintf(STDOUT_FILENO, "mbind failed with error: %s\n", strerror(errno));
         }
+      } else {
+        tiny_fprintf(STDOUT_FILENO, "mmap failed with error: %s\n", strerror(errno));
+        exit(-1);
       }
     }
     return pmdk_heap;
@@ -191,7 +194,6 @@ static void* pmemkv_mmap(void* addr, size_t length, int prot, int flags, int fd,
 }
 
 static void* slabstore_mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
-  static bool mmap_hint = true;
   if(fd != -1) {
     tiny_fprintf(STDOUT_FILENO, "mmap called: addr=%zu, length=%d, prot=%d, flags=%d, fd=%d, offset=%d\n",
                  addr, length, prot, flags, fd, offset);
@@ -199,15 +201,10 @@ static void* slabstore_mmap(void* addr, size_t length, int prot, int flags, int 
     safe_get_path(fd, path_buf, sizeof(path_buf));
     tiny_fprintf(STDOUT_FILENO, "  fd %d points to: %s\n", fd, path_buf);
 
-    flags = MAP_ANONYMOUS | MAP_PRIVATE;
-    if(addr != nullptr) flags |= MAP_FIXED;
+    flags = MAP_ANONYMOUS | MAP_PRIVATE; // mmap hint
+    if(addr != nullptr) flags |= MAP_FIXED_NOREPLACE; // real mmap
     void* heap = real_mmap(addr, length, PROT_READ | PROT_WRITE, flags, -1, 0);
     if(heap != MAP_FAILED) {
-      if(mmap_hint) {
-        mmap_hint = false;
-        return heap;
-      }
-
       if((uintptr_t) heap % 4096 != 0) {
         tiny_fprintf(STDOUT_FILENO, "Warning: address not page-aligned\n");
       }
@@ -227,7 +224,89 @@ static void* slabstore_mmap(void* addr, size_t length, int prot, int flags, int 
       if(res < 0) {
         tiny_fprintf(STDOUT_FILENO, "mbind failed with error: %s\n", strerror(errno));
       }
+    } else {
+      tiny_fprintf(STDOUT_FILENO, "mmap failed with error: %s\n", strerror(errno));
+      exit(-1);
     }
+    return heap;
+  }
+  return real_mmap(addr, length, prot, flags, fd, offset);
+}
+
+static void* plush_mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
+  if(fd != -1) {
+    tiny_fprintf(STDOUT_FILENO, "mmap called: addr=%zu, length=%d, prot=%d, flags=%d, fd=%d, offset=%d\n",
+                 addr, length, prot, flags, fd, offset);
+    char path_buf[256];
+    safe_get_path(fd, path_buf, sizeof(path_buf));
+    tiny_fprintf(STDOUT_FILENO, "  fd %d points to: %s\n", fd, path_buf);
+
+    flags = MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE;
+    void* heap = real_mmap(addr, length, PROT_READ | PROT_WRITE, flags, -1, 0);
+    if(heap != MAP_FAILED) {
+      if((uintptr_t) heap % 4096 != 0) {
+        tiny_fprintf(STDOUT_FILENO, "Warning: address not page-aligned\n");
+      }
+      if(length % 4096 != 0) {
+        tiny_fprintf(STDOUT_FILENO, "Warning: length not multiple of page size\n");
+      }
+      memset(heap, 0, 4096);
+      if(numa_max_node() < 1) {
+        tiny_fprintf(STDERR_FILENO, "System has no node 1, max_node=%d\n", numa_max_node());
+        return heap;
+      }
+      unsigned long nodemask = 0;
+      nodemask |= (0x01ul << numa_max_node()); // node 1
+      // there is little bug in mbind, see https://lists.openwall.net/linux-kernel/2010/07/26/113
+      long res = mbind(heap, length, MPOL_BIND, &nodemask,
+                       numa_max_node() + 2, MPOL_MF_MOVE);
+      if(res < 0) {
+        tiny_fprintf(STDOUT_FILENO, "mbind failed with error: %s\n", strerror(errno));
+      }
+    } else {
+      tiny_fprintf(STDOUT_FILENO, "mmap failed with error: %s\n", strerror(errno));
+      exit(-1);
+    }
+    return heap;
+  }
+  return real_mmap(addr, length, prot, flags, fd, offset);
+}
+
+static void* viper_mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
+  if(fd != -1) {
+    tiny_fprintf(STDOUT_FILENO, "mmap called: addr=%zu, length=%d, prot=%d, flags=%d, fd=%d, offset=%d\n",
+                 addr, length, prot, flags, fd, offset);
+    char path_buf[256];
+    safe_get_path(fd, path_buf, sizeof(path_buf));
+    tiny_fprintf(STDOUT_FILENO, "  fd %d points to: %s\n", fd, path_buf);
+
+    flags = MAP_ANONYMOUS | MAP_PRIVATE;
+    void* heap = real_mmap(addr, length, PROT_READ | PROT_WRITE, flags, -1, 0);
+    if(heap != MAP_FAILED) {
+      if((uintptr_t) heap % 4096 != 0) {
+        tiny_fprintf(STDOUT_FILENO, "Warning: address not page-aligned\n");
+      }
+      if(length % 4096 != 0) {
+        tiny_fprintf(STDOUT_FILENO, "Warning: length not multiple of page size\n");
+      }
+      memset(heap, 0, 4096);
+      if(numa_max_node() < 1) {
+        tiny_fprintf(STDERR_FILENO, "System has no node 1, max_node=%d\n", numa_max_node());
+        return heap;
+      }
+      unsigned long nodemask = 0;
+      nodemask |= (0x01ul << numa_max_node()); // node 1
+      // there is little bug in mbind, see https://lists.openwall.net/linux-kernel/2010/07/26/113
+      long res = mbind(heap, length, MPOL_BIND, &nodemask,
+                       numa_max_node() + 2, MPOL_MF_MOVE);
+      if(res < 0) {
+        tiny_fprintf(STDOUT_FILENO, "mbind failed with error: %s\n", strerror(errno));
+      }
+    } else {
+      tiny_fprintf(STDOUT_FILENO, "mmap failed with error: %s\n", strerror(errno));
+      exit(-1);
+    }
+    return heap;
   }
   return real_mmap(addr, length, prot, flags, fd, offset);
 }
@@ -240,6 +319,10 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
     case BASIC_SLABKV:
     case SLABKV:
       return slabstore_mmap(addr, length, prot, flags, fd, offset);
+    case PLUSHKV:
+      return plush_mmap(addr, length, prot, flags, fd, offset);
+    case VIPERKV:
+      return viper_mmap(addr, length, prot, flags, fd, offset);
     default:
       return real_mmap(addr, length, prot, flags, fd, offset);
   }
@@ -257,6 +340,14 @@ static int slabstore_munmap(void* addr, size_t length) {
   return real_munmap(addr, length);
 }
 
+static int plush_munmap(void* addr, size_t length) {
+  return real_munmap(addr, length);
+}
+
+static int viper_munmap(void* addr, size_t length) {
+  return real_munmap(addr, length);
+}
+
 int munmap(void* addr, size_t length) {
   pthread_once(&init_once, hook_init);
   // tiny_fprintf(STDOUT_FILENO, "munmap called: addr=%zu, length=%d\n", addr, length);
@@ -267,6 +358,10 @@ int munmap(void* addr, size_t length) {
     case BASIC_SLABKV:
     case SLABKV:
       return slabstore_munmap(addr, length);
+    case PLUSHKV:
+      return plush_munmap(addr, length);
+    case VIPERKV:
+      return viper_munmap(addr, length);
     default:
       return real_munmap(addr, length);
   }
