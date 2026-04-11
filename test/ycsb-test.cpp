@@ -77,7 +77,7 @@ int main(int argc, char* argv[]) {
 
   PinningMap pin;
   pin.pinning_thread(0, 0, pthread_self());
-  if(nthd < pin.processor_number() / pin.numa_number()) {
+  if(nthd <= pin.processor_number() / pin.numa_number()) {
     pin.set_numa_policy(false);
   } else { pin.set_numa_policy(true); }
 
