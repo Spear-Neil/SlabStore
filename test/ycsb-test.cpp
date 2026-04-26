@@ -18,12 +18,14 @@ static constexpr size_t kNthdLoads = 32;   // thread number for workloads genera
 static constexpr size_t kMaxKeySize = 256;
 static constexpr size_t kMaxValSize = 4096;
 
+static constexpr size_t kOpModeCount = 200'000'000ul;
+
 int main(int argc, char* argv[]) {
   if(argc < 12) {
     std::cerr << "[USAGE]: store path, store size (GiB), store type, worker thread number, records number,\n"
                  "         key size (>8, <=256), value size (>8, <=4096), read ratio(0,100), run duration (seconds)\n"
                  "         enable pcm, request distribution (0-unif, 1-zipf), load thread number (same as workers by default)\n"
-                 "         script path, zipf skewness (0.99 by default)"
+                 "         script path, zipf skewness (0.99 by default), enable operation mode"
               << std::endl;
     exit(-1);
   }
@@ -45,6 +47,8 @@ int main(int argc, char* argv[]) {
   if(argc > 13) script = std::string(argv[13]);
   double zipf_skew = 0.99;
   if(argc > 14) zipf_skew = std::stod(argv[14]);
+  bool op_mode = false;
+  if(argc > 15) op_mode = std::stoi(argv[15]);
 
   if(store_type >= NUM_KVSTORE) {
     std::cerr << "[ERROR]: invalid store type" << std::endl;
@@ -89,6 +93,7 @@ int main(int argc, char* argv[]) {
          records_num, key_size, val_size, read_ratio);
   printf("[INFO]: run duration: %zu, enable pcm: %i, request distribution: %s, zipf skew: %f\n",
          run_duration, enable_pcm, zipf_dis ? "zipf" : "unif", zipf_skew);
+  printf("[INFO]: op mode enabled: %i\n", op_mode);
   fflush(stdout);
 
   Timer timer;
@@ -206,6 +211,7 @@ int main(int argc, char* argv[]) {
   workers.clear(), pin.reset_pinning_counter(0, 0);
   double run_tpt = 0;
   std::atomic<size_t> total_failed = 0, total_count = 0;
+  std::atomic<size_t> opmode_count = 0;
   for(int tid = 0; tid < nthd; tid++) {
     workers.push_back(std::thread([&](int tid) {
       pin.pinning_thread_continuous(pthread_self());
@@ -236,7 +242,15 @@ int main(int argc, char* argv[]) {
           wcnt++;
         }
 
-        if(opcnt++ % 100000 == 0 && timer.duration_s() >= run_duration) break;
+        opcnt++;
+        if(op_mode == false && opcnt % 100000 == 0
+          && timer.duration_s() >= run_duration) {
+          break;
+        }
+        if(op_mode == true && opcnt % 1000 == 0) {
+          size_t finished = opmode_count.fetch_add(1000);
+          if(finished + 1000 >= kOpModeCount) break;
+        }
       }
       long drt = timer.duration_us();
 //      std::cout << "tid: " << tid << ", read/write count: " << rcnt << " / " << wcnt << std::endl;
@@ -251,7 +265,8 @@ int main(int argc, char* argv[]) {
   drt = timer.duration_us();
   std::cout << "end, throughput: " << run_tpt << std::endl;
   std::cout << "[INFO]: total failed lookup count: " << total_failed
-            << ", total operation count: " << total_count << std::endl;
+            << ", total operation count: " << total_count
+            << " op mode count:" << opmode_count << std::endl;
 
   if(enable_pcm) {
     after = pcm->getSystemCounterState();
