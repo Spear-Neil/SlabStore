@@ -756,6 +756,139 @@ def figure_throughput_and_space_over_time():
     fig.show()
 
 
+def figure_overview():
+    store_path = "/mnt/pmem0/ycsb-store"
+    store_size = 128
+    records_num = 200000000
+
+    # recover and performance overview
+    sids = [0, 2, 3, 6]
+    for sid in sids:
+        remove_path(store_path)
+        ycsb_script = ["./build/test/test-ycsb-test", store_path, str(store_size),
+                       str(sid), str(48), str(records_num), str(8), str(8), str(0),
+                       str(60), str(0), str(0), str(48), str(pm_script), str(0), str(1)]
+        log_name = ("ycsb-overview-" + str(sid) + ".log")
+        log_path = os.path.join(log_dir, log_name)
+
+        if not os.path.exists(log_path):
+            result = subprocess.run(ycsb_script, capture_output=True, text=True).stdout
+            with open(log_path, 'w') as log:
+                log.write(str(ycsb_script) + "\n" + result + "\n\n")
+
+            ycsb_restart = ["./build/test/test-ycsb-restart", store_path, str(sid)]
+            restart_log_name = ("ycsb-overview-restart-" + str(sid) + ".log")
+            restart_log_path = os.path.join(log_dir, restart_log_name)
+            if not os.path.exists(restart_log_path):
+                result = subprocess.run(ycsb_restart, capture_output=True, text=True).stdout
+                with open(restart_log_path, 'w') as log:
+                    log.write(str(ycsb_restart) + "\n" + result + "\n\n")
+    remove_path(store_path)
+
+    # for sid in sids:
+    #     remove_path(store_path)
+    #     ycsb_script = ["./build/test/test-ycsb-test", store_path, str(store_size),
+    #                    str(sid), str(48), str(records_num), str(8), str(8), str(100),
+    #                    str(60), str(0), str(0), str(48), str(pm_script), str(0), str(1)]
+    #     log_name = ("ycsb-lookup-overview-" + str(sid) + ".log")
+    #     log_path = os.path.join(log_dir, log_name)
+    #     if not os.path.exists(log_path):
+    #         result = subprocess.run(ycsb_script, capture_output=True, text=True).stdout
+    #         with open(log_path, 'w') as log:
+    #             log.write(str(ycsb_script) + "\n" + result + "\n\n")
+    # remove_path(store_path)
+
+    # space overview
+    libs = ["pmemkv-var", "slabstore-var", "plush-var", "viper-var"]
+    for lib in libs:
+        input_lib = "./build/test/libpibench-" + lib + ".so"
+        key_size, val_size = 8, 8
+        records_num = 200000000
+        pool_size = 128 * 1024 * 1024 * 1024
+        pibench = ["./build/test/PiBench", input_lib, "-n", str(records_num), "-r", "0", "-u", "1",
+                   "-p", str(records_num * 2), "-t", str(48), "--pool_size", str(pool_size), "--get_size",
+                   "--key_size", str(key_size), "--value_size", str(val_size), "--script", str(pm_script)]
+        log_name = ('space-overview-' + lib + '.log')
+        log_path = os.path.join(log_dir, log_name)
+        if not os.path.exists(log_path):
+            remove_path("/mnt/pmem0/pibench")
+            os.mkdir("/mnt/pmem0/pibench")
+            result = subprocess.run(pibench, capture_output=True, text=True).stdout
+            pmempool_info = ""
+            if lib == "pmemkv-var":
+                pmempool = ['pmempool', 'info', '-s', '/mnt/pmem0/pibench/pmemkv']
+                pmempool_info = subprocess.run(pmempool, capture_output=True, text=True).stdout
+            with open(log_path, "w") as log:
+                log.write(str(pibench) + "\n" + result + "\n" + pmempool_info)
+    remove_path("/mnt/pmem0/pibench")
+
+    stores = ["pmemkv", "SlabStore", "Plush", "Viper"]
+    fig, axes = plt.subplots(1, 2, figsize=(10, 3.8), gridspec_kw={'wspace': 0.2})
+    recover_time = []
+    for ind in range(0, 4):
+        restart_log_name = ("ycsb-overview-restart-" + str(sids[ind]) + ".log")
+        restart_log_path = os.path.join(log_dir, restart_log_name)
+        with open(restart_log_path) as log:
+            result = log.read()
+            if not result: exit("unknown error, " + restart_log_name)
+            match = re.search(r"YCSB-Restart: Total Recovery time:\s*(\d+)\sms", result)
+            if not match: exit("unknown error, match failed")
+            recover_time.append(float(match.group(1)) / 1000)
+
+    recax = axes[0]
+    recax.plot(range(0, 4), recover_time, label="recover", marker='s', color='black',
+               linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
+    recax.set_xticks(range(0, 4), stores, fontsize=12)
+    recax.set_ylabel('\u25A0 Recovery time (sec)', fontsize=12)
+
+    total_space = []
+    for ind in range(0, 4):
+        log_name = ('space-overview-' + libs[ind] + '.log')
+        log_path = os.path.join(log_dir, log_name)
+        with open(log_path) as log:
+            result = log.read()
+            if not result: exit("unknown error, " + log_name)
+            if libs[ind] == "pmemkv-var":
+                match = re.search(r"^Total used bytes[\s\t]*:[\s\t]*(\d+)", result, re.MULTILINE)
+                if not match: exit("unknown error, match failed")
+                total_space.append(float(match.group(1)) / (1024 * 1024 * 1024))
+            else:
+                match = re.search(r"^PMem footprint \(bytes\):\s*(\d+)", result, re.MULTILINE)
+                if not match: exit("unknown error, match failed")
+                total_space.append(float(match.group(1)) / (1024 * 1024 * 1024))
+
+    spaceax = axes[0].twinx()
+    spaceax.plot(range(0, 4), total_space, label="space", marker='o', color='black',
+                 linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
+    spaceax.set_ylabel('\u25CF PMem footprint (GiB)', fontsize=12)
+
+    insert_tpt, update_tpt = [], []
+    for ind in range(0, 4):
+        log_name = "ycsb-overview-" + str(sids[ind]) + ".log"
+        log_path = os.path.join(log_dir, log_name)
+        with open(log_path) as log:
+            result = log.read()
+            if not result: exit("unknown error, " + log_name)
+            match = re.search(r"run phase.*throughput:\s*([\d.]+)", result)
+            if not match: exit("unknown error, match failed")
+            update_tpt.append(float(match.group(1)))
+            match = re.search(r"load phase.*throughput:\s*([\d.]+)", result)
+            if not match: exit("unknown error, match failed")
+            insert_tpt.append(float(match.group(1)))
+    axes[1].plot(range(0, 4), insert_tpt, label="insert", marker='P', color='black',
+                 linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
+    axes[1].plot(range(0, 4), update_tpt, label="update", marker='^', color='black',
+                 linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
+    axes[1].set_xticks(range(0, 4), stores, fontsize=12)
+    axes[1].yaxis.tick_right()
+    axes[1].yaxis.set_label_position("right")
+    axes[1].set_ylabel('Million Operations per Second', fontsize=12)
+    axes[1].legend()
+
+    fig.savefig("overview.pdf", bbox_inches='tight')
+    fig.show()
+
+
 if __name__ == "__main__":
     build_project()
 
@@ -767,18 +900,19 @@ if __name__ == "__main__":
     plt.rcParams['ps.fonttype'] = 42
     plt.rcParams['font.weight'] = 'medium'
 
-    # fixed-size records
-    figure_core_ops()
-
-    # variable-size records
-    figure_scalability(8, 32, False)
-    figure_scalability(32, 200, True)
-
-    figure_ycsb_insert()
-
-    figure_ycsb_access(8, 32)
-    figure_ycsb_access(32, 200)
-
-    figure_size_sensitivity_and_recovery()
-
-    figure_throughput_and_space_over_time()
+    # # fixed-size records
+    # figure_core_ops()
+    #
+    # # variable-size records
+    # figure_scalability(8, 32, False)
+    # figure_scalability(32, 200, True)
+    #
+    # figure_ycsb_insert()
+    #
+    # figure_ycsb_access(8, 32)
+    # figure_ycsb_access(32, 200)
+    #
+    # figure_size_sensitivity_and_recovery()
+    #
+    # figure_throughput_and_space_over_time()
+    figure_overview()
