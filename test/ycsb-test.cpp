@@ -18,7 +18,7 @@ static constexpr size_t kNthdLoads = 32;   // thread number for workloads genera
 static constexpr size_t kMaxKeySize = 256;
 static constexpr size_t kMaxValSize = 4096;
 
-static constexpr size_t kOpModeCount = 200'000'000ul;
+static constexpr size_t kOpModeCount = 400'000'000ul;
 
 int main(int argc, char* argv[]) {
   if(argc < 12) {
