@@ -593,7 +593,7 @@ def figure_size_sensitivity_and_recovery():
         color_id += 1
 
     right_top.set_xticks(xticks + width, x_labels, fontsize=12)
-    right_top.set_ylabel('Fast reboot time (sec)', fontsize=12)
+    right_top.set_ylabel('Fast restart time (sec)', fontsize=12)
     legends = [Patch(facecolor=size_colors[idx], edgecolor='black', hatch='x', alpha=1,
                      label=str(restart_sizes[idx]) + " user time")
                for idx in range(len(restart_sizes))]
@@ -642,7 +642,7 @@ def figure_size_sensitivity_and_recovery():
                for idx in range(len(restart_sizes))]
     legends.append(Patch(facecolor='firebrick', edgecolor='black', alpha=1, label="sys (kernel) time"))
     right_bottom.legend(handles=legends, loc='upper left', ncol=1, fontsize=11)
-    right_bottom.set_title('(b) Fast reboot and recovery time.', x=0.5, y=-0.35, fontsize=12)
+    right_bottom.set_title('(b) Fast restart and recovery time.', x=0.5, y=-0.35, fontsize=12)
 
     fig.tight_layout()
     fig.savefig("size-and-recover.pdf", bbox_inches='tight')
@@ -823,7 +823,7 @@ def figure_overview():
     remove_path("/mnt/pmem0/pibench")
 
     stores = ["pmemkv", "SlabStore", "Plush", "Viper"]
-    fig, axes = plt.subplots(1, 2, figsize=(10, 3.8), gridspec_kw={'wspace': 0.2})
+    fig, axes = plt.subplots(1, 2, figsize=(10, 3.5), gridspec_kw={'wspace': 0.2})
     recover_time = []
     for ind in range(0, 4):
         restart_log_name = ("ycsb-overview-restart-" + str(sids[ind]) + ".log")
@@ -835,11 +835,17 @@ def figure_overview():
             if not match: exit("unknown error, match failed")
             recover_time.append(float(match.group(1)) / 1000)
 
-    recax = axes[0]
-    recax.plot(range(0, 4), recover_time, label="recover", marker='s', color='black',
-               linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
+    x = np.arange(len(stores))
+    width = 0.4
+
+    recax = axes[1]
+    rbar = recax.bar(x - width / 2 - 0.01, recover_time, width=width, label="recover", color='darkgrey', hatch='+',
+                     alpha=1)
+    # recax.plot(range(0, 4), recover_time, label="recover", marker='s', color='black',
+    #            linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
     recax.set_xticks(range(0, 4), stores, fontsize=12)
-    recax.set_ylabel('\u25A0 Recovery time (sec)', fontsize=12)
+    # recax.set_ylabel('\u25A0 Recovery time (sec)', fontsize=12)
+    recax.set_ylabel('Recovery time (sec)', fontsize=12)
 
     total_space = []
     for ind in range(0, 4):
@@ -857,10 +863,22 @@ def figure_overview():
                 if not match: exit("unknown error, match failed")
                 total_space.append(float(match.group(1)) / (1024 * 1024 * 1024))
 
-    spaceax = axes[0].twinx()
-    spaceax.plot(range(0, 4), total_space, label="space", marker='o', color='black',
-                 linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
-    spaceax.set_ylabel('\u25CF PMem footprint (GiB)', fontsize=12)
+    spaceax = axes[1].twinx()
+    spaceax.bar(x + width / 2 + 0.01, total_space, width=width, label="space", color='gray', hatch='x', alpha=1)
+    # spaceax.plot(range(0, 4), total_space, label="space", marker='o', color='black',
+    #              linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
+    # spaceax.set_ylabel('\u25CF PMem footprint (GiB)', fontsize=12)
+    spaceax.set_ylabel('PMem footprint (GiB)', fontsize=12)
+
+    handles1, labels1 = recax.get_legend_handles_labels()
+    handles2, labels2 = spaceax.get_legend_handles_labels()
+    axes[1].legend(handles1 + handles2, labels1 + labels2, bbox_to_anchor=(0.62, 1))
+
+    rbar[0].set_edgecolor('black')
+    rbar[0].set_linewidth(4)
+    height = rbar[0].get_height()
+    x_center = rbar[0].get_x() + rbar[0].get_width() / 2
+    recax.text(x_center, height + 0.2, f'{height}', ha='center', va='bottom', fontsize=9)
 
     insert_tpt, update_tpt = [], []
     for ind in range(0, 4):
@@ -875,16 +893,18 @@ def figure_overview():
             match = re.search(r"load phase.*throughput:\s*([\d.]+)", result)
             if not match: exit("unknown error, match failed")
             insert_tpt.append(float(match.group(1)))
-    axes[1].plot(range(0, 4), insert_tpt, label="insert", marker='P', color='black',
-                 linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
-    axes[1].plot(range(0, 4), update_tpt, label="update", marker='^', color='black',
-                 linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
-    axes[1].set_xticks(range(0, 4), stores, fontsize=12)
-    axes[1].yaxis.tick_right()
-    axes[1].yaxis.set_label_position("right")
-    axes[1].set_ylabel('Million Operations per Second', fontsize=12)
-    axes[1].legend()
+    # axes[0].plot(range(0, 4), insert_tpt, label="insert", marker='P', color='black',
+    #              linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
+    # axes[0].plot(range(0, 4), update_tpt, label="update", marker='^', color='black',
+    #              linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
+    axes[0].bar(x - width / 2 - 0.01, insert_tpt, width=width, label="insert", color='darkgrey', hatch='+', alpha=1)
+    axes[0].bar(x + width / 2 + 0.01, update_tpt, width=width, label="update", color='gray', hatch='x', alpha=1)
+    axes[0].set_xticks(x, stores, fontsize=12)
+    axes[0].set_ylabel('Million Operations per Second', fontsize=12)
+    axes[0].legend()
 
+    axes[0].set_title('(a) Insert/Update throughput.', x=0.5, y=-0.2, fontsize=12)
+    axes[1].set_title('(b) Recovery time and PMem footprint.', x=0.5, y=-0.2, fontsize=12)
     fig.savefig("overview.pdf", bbox_inches='tight')
     fig.show()
 
@@ -900,19 +920,19 @@ if __name__ == "__main__":
     plt.rcParams['ps.fonttype'] = 42
     plt.rcParams['font.weight'] = 'medium'
 
-    # # fixed-size records
-    # figure_core_ops()
-    #
-    # # variable-size records
-    # figure_scalability(8, 32, False)
-    # figure_scalability(32, 200, True)
-    #
-    # figure_ycsb_insert()
-    #
-    # figure_ycsb_access(8, 32)
-    # figure_ycsb_access(32, 200)
-    #
-    # figure_size_sensitivity_and_recovery()
-    #
-    # figure_throughput_and_space_over_time()
+    # fixed-size records
+    figure_core_ops()
+
+    # variable-size records
+    figure_scalability(8, 32, False)
+    figure_scalability(32, 200, True)
+
+    figure_ycsb_insert()
+
+    figure_ycsb_access(8, 32)
+    figure_ycsb_access(32, 200)
+
+    figure_size_sensitivity_and_recovery()
+
+    figure_throughput_and_space_over_time()
     figure_overview()
