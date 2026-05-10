@@ -77,8 +77,8 @@ def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
     remove_path("/mnt/pmem0/pibench")
 
     # figure throughput
-    fig = plt.figure(figsize=(9.5, 7.5))
-    row, col = 2, 2
+    fig = plt.figure(figsize=(10, 3.8))
+    row, col = 1, 2
     for rid in range(row):
         for cid in range(col):
             wid = rid * col + cid
@@ -108,7 +108,7 @@ def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
 
     fig.tight_layout()
     lines, labels = fig.axes[-1].get_legend_handles_labels()
-    fig.legend(lines, labels, loc='upper center', ncol=len(objects) / 2, bbox_to_anchor=(0.5, 1.11), fontsize=15)
+    fig.legend(lines, labels, loc='upper center', ncol=len(objects) / 2, bbox_to_anchor=(0.5, 1.22), fontsize=15)
     fig.text(-0.03, 0.5, 'Million Operations per Second', va='center', rotation='vertical', fontsize=15)
     fig.text(0.485, -0.02, "Threads", va='center', fontsize=15)
     fig.savefig("core-ops-tpt.pdf", bbox_inches='tight')
@@ -140,7 +140,7 @@ def figure_core_ops():  # fixed-size record (8-byte key, 8-byte value)
                     latency.append(float(match.group(1)) / 1000)  # us
             plt.plot(pattern, latency, label=objects[oid], marker=markers[oid], color=colors[oid],
                      linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
-        plt.title(loads[lid], y=-0.2, fontsize=15)
+        plt.title(loads[lid], y=1.02, fontsize=15)
 
     fig.tight_layout()
     lines, labels = fig.axes[-1].get_legend_handles_labels()
@@ -909,6 +909,84 @@ def figure_overview():
     fig.show()
 
 
+def figure_cxl():
+    store_path = "/mnt/pmem0/ycsb-store"
+    store_size = 64
+    records_num = 100000000
+
+    # the order can not be changed
+    stores = ["pmemkv", "BasicSlabStore", "SlabStore", "Plush", "Viper"]
+    colors = ['blue', 'steelblue', 'red', 'orange', 'green', 'purple', 'gray', 'brown']
+    markers = ["o", "X", "d", "s", "^", "v", "P", "*"]
+    threads = [1, 2, 4, 8, 16, 24, 32, 40, 48]
+    workloads = ["Read-Only", "Balanced", "Write-Only"]
+
+    # # set numa 1 uncore freq to min to simulate CXL environment with lower bandwidth
+    # cmd = ("cat /sys/devices/system/cpu/intel_uncore_frequency/package_01_die_00/initial_min_freq_khz "
+    #        "| tee /sys/devices/system/cpu/intel_uncore_frequency/package_01_die_00/max_freq_khz")
+    # subprocess.run(cmd, shell=True, check=True)
+    #
+    # for wid in range(len(workloads)):
+    #     read_ratio = 100 if wid == 0 else (50 if wid == 1 else 0)
+    #     for sid in range(len(stores)):
+    #         for nthd in threads:
+    #             key_size, val_size = 8, 32
+    #             nthd_load = nthd if wid == 0 else 48
+    #             cxl_script = ['./build/test/test-ycsb-test',
+    #                           store_path, str(store_size), str(sid), str(nthd), str(records_num),
+    #                           str(key_size), str(val_size), str(read_ratio), str(0), str(0), str(0),
+    #                           str(nthd_load), str(pm_script), str(0), str(1)]
+    #             log_name = ("cxl-" + str(wid) + "-" + str(sid) + "-" + str(nthd) + ".log")
+    #             log_path = os.path.join(log_dir, log_name)
+    #             if not os.path.exists(log_path):
+    #                 remove_path(store_path)
+    #                 env = os.environ.copy()
+    #                 env["LD_PRELOAD"] = "./build/test/libmmap-hook.so "
+    #                 result = subprocess.run(cxl_script, env=env, capture_output=True, text=True).stdout
+    #                 with open(log_path, 'w') as log:
+    #                     log.write(str(cxl_script) + "\n" + result + "\n\n")
+    # remove_path(store_path)
+    #
+    # cmd = ("cat /sys/devices/system/cpu/intel_uncore_frequency/package_01_die_00/initial_max_freq_khz "
+    #        "| tee /sys/devices/system/cpu/intel_uncore_frequency/package_01_die_00/max_freq_khz")
+    # subprocess.run(cmd, shell=True, check=True)
+
+    titles = ["Insert", "Read-Only", "Balanced", "Write-Only"]
+    fig = plt.figure(figsize=(9.5, 7.2))
+    for tid in range(len(titles)):
+        plt.subplot(2, 2, tid + 1)
+        for sid in range(len(stores)):
+            perf = []
+            for nthd in threads:
+                wid = 0 if tid == 0 else tid - 1
+                log_name = ("cxl-" + str(wid) + "-" + str(sid) + "-" + str(nthd) + ".log")
+                log_path = os.path.join(log_dir, log_name)
+                with open(log_path) as log:
+                    result = log.read()
+                    if not result: exit("unknown error, " + log_name)
+                    match = re.search(r"run phase.*throughput:\s*([\d.]+)", result)
+                    if tid == 0:
+                        match = re.search(r"load phase.*throughput:\s*([\d.]+)", result)
+                    if not match: exit("unknown error, match failed")
+                    perf.append(float(match.group(1)))
+            plt.plot(threads, perf, label=stores[sid], marker=markers[sid], color=colors[sid],
+                     linewidth=3, markersize=12, markeredgewidth=1, markeredgecolor='black', alpha=0.95)
+        plt.xticks(threads[1:])
+        plt.xlim(0, threads[-1] + 1)
+        plt.axvspan(threads[-1] / 2, threads[-1] + 1, color='lightgrey', alpha=0.4)
+        plt.grid(axis='y', color='darkgray', linestyle=':', linewidth=2, alpha=0.4)
+        plt.title(titles[tid], x=0.5, y=1.02, fontsize=15)
+
+    fig.tight_layout()
+    lines, labels = fig.axes[-1].get_legend_handles_labels()
+    fig.legend(lines, labels, loc='upper center', ncol=len(stores), bbox_to_anchor=(0.5, 1.05), fontsize=14)
+    fig.text(-0.03, 0.5, 'Million Operations per Second', va='center', rotation='vertical', fontsize=15)
+    fig.text(0.482, -0.02, "Threads", va='center', fontsize=15)
+    fig.savefig("cxl-tpt.pdf", bbox_inches='tight')
+    fig.show()
+
+
+
 if __name__ == "__main__":
     build_project()
 
@@ -920,19 +998,21 @@ if __name__ == "__main__":
     plt.rcParams['ps.fonttype'] = 42
     plt.rcParams['font.weight'] = 'medium'
 
-    # fixed-size records
-    figure_core_ops()
+    # # fixed-size records
+    # figure_core_ops()
+    #
+    # # variable-size records
+    # figure_scalability(8, 32, False)
+    # figure_scalability(32, 200, True)
+    #
+    # figure_ycsb_insert()
+    #
+    # figure_ycsb_access(8, 32)
+    # figure_ycsb_access(32, 200)
+    #
+    # figure_size_sensitivity_and_recovery()
+    #
+    # figure_throughput_and_space_over_time()
+    # figure_overview()
 
-    # variable-size records
-    figure_scalability(8, 32, False)
-    figure_scalability(32, 200, True)
-
-    figure_ycsb_insert()
-
-    figure_ycsb_access(8, 32)
-    figure_ycsb_access(32, 200)
-
-    figure_size_sensitivity_and_recovery()
-
-    figure_throughput_and_space_over_time()
-    figure_overview()
+    figure_cxl()
