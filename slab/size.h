@@ -1,9 +1,3 @@
-/*
- * Copyright (c) 2025-Present, Chen Yuan <yuan.chen@whu.edu.cn>
- *
- * All rights reserved. No warranty, explicit or implicit, provided.
- */
-
 #ifndef SLABSTORE_SIZE_CLASS_H
 #define SLABSTORE_SIZE_CLASS_H
 
