@@ -1,4 +1,5 @@
 # SlabStore: A Write-Optimized and Space-Efficient Key-Value Store for Persistent Memory
+
 SlabStore is a DRAM-PMem hybrid key-value store based on a tailored slab PMem allocator. The index structure resides in
 volatile memory, and it maintains only records on PMem. For space-efficiency, it employs a slab allocation strategy like
 jemalloc and maintains selective persistence merely for allocator's core metadata. Given that random small writes on PMem
@@ -20,7 +21,7 @@ meanwhile, system crash and power failure are rare events in production systems.
 while inevitably incurring expensive operational write overhead is inefficient and uneconomic. SlabStore thus maintains 
 minimal crash consistency guarantees for failure recovery and employs a full scan reconstruction after failures. By the way,
 it also provides a fast reboot mode for a clean/normal shutdown.
-
+## Note: To meet the requirement of the review process, we have removed personal information (including .gitmodules, some cmake files), so the code in this repository is not the complete version of our implementation (You may not able to run the code).
 
 # Requirements
 * x86-64 CPU supporting persistent memory and clwb, mfence, SSE2 instructions
