@@ -951,7 +951,7 @@ def figure_cxl():
     #        "| tee /sys/devices/system/cpu/intel_uncore_frequency/package_01_die_00/max_freq_khz")
     # subprocess.run(cmd, shell=True, check=True)
 
-    titles = ["Insert", "Read-Only", "Balanced", "Write-Only"]
+    titles = ["Load Phase", "Read-Only", "Balanced", "Write-Only"]
     fig = plt.figure(figsize=(9.5, 7.2))
     for tid in range(len(titles)):
         plt.subplot(2, 2, tid + 1)
@@ -998,21 +998,21 @@ if __name__ == "__main__":
     plt.rcParams['ps.fonttype'] = 42
     plt.rcParams['font.weight'] = 'medium'
 
-    # # fixed-size records
-    # figure_core_ops()
-    #
-    # # variable-size records
-    # figure_scalability(8, 32, False)
-    # figure_scalability(32, 200, True)
-    #
-    # figure_ycsb_insert()
-    #
-    # figure_ycsb_access(8, 32)
-    # figure_ycsb_access(32, 200)
-    #
-    # figure_size_sensitivity_and_recovery()
-    #
-    # figure_throughput_and_space_over_time()
-    # figure_overview()
+    # fixed-size records
+    figure_core_ops()
+
+    # variable-size records
+    figure_scalability(8, 32, False)
+    figure_scalability(32, 200, True)
+
+    figure_ycsb_insert()
+
+    figure_ycsb_access(8, 32)
+    figure_ycsb_access(32, 200)
+
+    figure_size_sensitivity_and_recovery()
+
+    figure_throughput_and_space_over_time()
+    figure_overview()
 
     figure_cxl()
